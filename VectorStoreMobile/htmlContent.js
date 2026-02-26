@@ -233,7 +233,7 @@ export const HTML = `<!DOCTYPE html>
   <script type="text/babel">
 const { useState, useEffect, useRef, useCallback } = React;
 
-// ─── Vector math ──────────────────────────────────────────────────────────────
+// ─── Utility Functions ─────────────────────────────────────────────────────────
 function cosineSimilarity(a, b) {
   if (!Array.isArray(a) || !Array.isArray(b) || a.length !== b.length) return 0;
   let dot = 0, magA = 0, magB = 0;
@@ -245,7 +245,16 @@ function cosineSimilarity(a, b) {
   return Math.max(-1, Math.min(1, dot / denom));
 }
 
-// ─── Embed via Transformers.js ────────────────────────────────────────────────
+function searchItems(queryVector, allItems, topK, minScore = 0.0) {
+  const results = allItems
+    .map(item => ({ ...item, score: cosineSimilarity(queryVector, item.vector) }))
+    .filter(item => item.score >= minScore)
+    .sort((a, b) => b.score - a.score)
+    .slice(0, topK);
+  return results;
+}
+
+// ─── Vector math ──────────────────────────────────────────────────────────────
 let pipelineInstance = null, modelLoading = false;
 const loadQueue = [];
 
@@ -421,10 +430,7 @@ function SemanticInventory() {
     try {
       const qVec = await embedText(q);
       const k = Math.max(1, Math.min(topK, inventory.length));
-      setResults(
-        inventory.map(item => ({ ...item, score: cosineSimilarity(qVec, item.vector) }))
-          .sort((a, b) => b.score - a.score).slice(0, k)
-      );
+      setResults(searchItems(qVec, inventory, k));
     } catch (e) {
       setError(String(e?.message ?? e)); toast("Search failed.", "error");
     } finally {
@@ -945,6 +951,36 @@ const d = {
   err:    { borderRadius:6, padding:"9px 12px", fontSize:11, color:"#f87171", lineHeight:1.5,
             background:"rgba(127, 29, 29, 0.5)", border:"1px solid rgba(248, 113, 113, 0.2)" },
 };
+
+// ─── Tests ──────────────────────────────────────────────────────────────────────
+function runTests() {
+  const mockItems = [
+    { id: 1, name: "Item A", vector: [1, 0, 0] },
+    { id: 2, name: "Item B", vector: [0, 1, 0] },
+    { id: 3, name: "Item C", vector: [0, 0, 1] },
+    { id: 4, name: "Item D", vector: [0.5, 0.5, 0] },
+  ];
+  const queryVec = [1, 0, 0];
+
+  // Test 1: cosineSimilarity returns correct values
+  const test1 = cosineSimilarity([1, 0, 0], [1, 0, 0]) === 1;
+  const test2 = cosineSimilarity([1, 0, 0], [0, 1, 0]) === 0;
+  const test3 = Math.abs(cosineSimilarity([1, 0, 0], [-1, 0, 0]) + 1) < 0.0001;
+
+  // Test 2: searchItems returns sorted results
+  const results = searchItems(queryVec, mockItems, 3);
+  const test4 = results.length === 3;
+  const test5 = results[0].id === 1; // [1,0,0] has highest similarity
+  const test6 = results[0].score >= results[1].score;
+
+  // Test 3: minScore filter works
+  const filteredResults = searchItems(queryVec, mockItems, 4, 0.5);
+  const test7 = filteredResults.every(r => r.score >= 0.5);
+
+  console.log("Tests:", { test1, test2, test3, test4, test5, test6, test7 });
+}
+
+runTests();
 
 function initApp() {
   document.getElementById('loading').style.display = 'none';
