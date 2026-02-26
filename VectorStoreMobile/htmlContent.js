@@ -1,3 +1,113 @@
+export const HTML = `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>VectorStock - Semantic Inventory</title>
+  <style>@import url('https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500;600&display=swap');
+
+body {
+  margin: 0;
+  padding: 0;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen',
+    'Ubuntu', 'Cantarell', 'Fira Sans', 'Droid Sans', 'Helvetica Neue',
+    sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+#root {
+  width: 100%;
+  min-height: 100vh;
+}
+
+#loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 100vh;
+  background: #090e17;
+  color: #60a5fa;
+  font-family: monospace;
+  font-size: 14px;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.spinner {
+  width: 40px;
+  height: 40px;
+  border: 3px solid #1e3045;
+  border-top-color: #60a5fa;
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
+.spin {
+  width: 20px;
+  height: 20px;
+  border: 2px solid #1e3045;
+  border-top-color: #3b82f6;
+  border-radius: 50%;
+  animation: spin 0.7s linear infinite;
+  flex-shrink: 0;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+@keyframes slideUp {
+  from { transform: translateY(14px); opacity: 0; }
+  to   { transform: none; opacity: 1; }
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: 0.5; }
+}
+
+input:focus,
+textarea:focus,
+select:focus {
+  border-color: #3b82f6 !important;
+  box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.12);
+}
+
+button:not(:disabled):hover {
+  filter: brightness(1.12);
+}
+
+::-webkit-scrollbar { width: 5px; }
+::-webkit-scrollbar-track { background: #090e17; }
+::-webkit-scrollbar-thumb { background: #1e3045; border-radius: 3px; }
+</style>
+</head>
+<body>
+  <div id="loading">
+    <div class="spinner"></div>
+    <div>Loading VectorStock...</div>
+  </div>
+  <div id="root"></div>
+
+  <!-- Load Transformers.js as a module -->
+  <script type="module">
+    import { pipeline, env } from 'https://cdn.jsdelivr.net/npm/@xenova/transformers@2.17.2';
+    window.transformersPipeline = pipeline;
+    window.transformersEnv = env;
+    env.allowLocalModels = false;
+    console.log('Transformers.js loaded successfully');
+    window.transformersReady = true;
+    window.dispatchEvent(new Event('transformers-ready'));
+  </script>
+
+  <!-- React, ReactDOM, Babel from CDN -->
+  <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+  <!-- Main App (JSX must be inline for Babel Standalone to process it) -->
+  <script type="text/babel">
 const { useState, useEffect, useRef } = React;
 
 // ─── Vector math ──────────────────────────────────────────────────────────────
@@ -60,7 +170,7 @@ async function getEmbeddingPipeline() {
   } catch (error) {
     modelLoading = false;
     console.error('Pipeline creation error:', error);
-    throw new Error(`Failed to load embedding model: ${error.message}`);
+    throw new Error(\`Failed to load embedding model: \${error.message}\`);
   }
 }
 
@@ -74,7 +184,7 @@ async function embedText(text) {
     return Array.from(output.data);
   } catch (error) {
     console.error('Embedding error:', error);
-    throw new Error(`Embedding failed: ${error.message}`);
+    throw new Error(\`Embedding failed: \${error.message}\`);
   }
 }
 
@@ -159,7 +269,7 @@ function SemanticInventory() {
         console.error('Model initialization error:', e);
         if (live) {
           setModelStatus("error");
-          setError(`Model load failed: ${e.message}`);
+          setError(\`Model load failed: \${e.message}\`);
           toast("Failed to load embedding model", "error");
         }
       }
@@ -187,11 +297,11 @@ function SemanticInventory() {
         const item = SEED_ITEMS[i];
         if (live) setSeedProg({ done: i, total: SEED_ITEMS.length, current: item.name });
         try {
-          const vec = await embedText(`${item.name}. ${item.description}`);
+          const vec = await embedText(\`\${item.name}. \${item.description}\`);
           acc.push({ id: crypto.randomUUID(), ...item, vector: vec, addedAt: new Date().toLocaleString() });
           if (live) { setInventory([...acc]); setSeedProg({ done: i + 1, total: SEED_ITEMS.length, current: item.name }); }
         } catch (e) {
-          console.warn(`Seed skip "${item.name}":`, e.message);
+          console.warn(\`Seed skip "\${item.name}":\`, e.message);
           if (live) setSeedProg({ done: i + 1, total: SEED_ITEMS.length, current: item.name });
         }
       }
@@ -228,7 +338,7 @@ function SemanticInventory() {
       };
       setInventory(inv => [...inv, item]);
       setAddForm({ name: "", description: "", qty: "", unit: "", status: "In Stock" });
-      toast(`"${item.name}" embedded and stored ✓`);
+      toast(\`"\${item.name}" embedded and stored ✓\`);
     } catch (e) {
       setError(String(e?.message ?? e));
       toast("Embedding failed.", "error");
@@ -310,7 +420,7 @@ function SemanticInventory() {
     seed:    { background:"#0d1a27", border:"1px solid #1e3045", borderRadius:8, padding:"12px 16px", display:"flex", flexDirection:"column", gap:7 },
     seedRow: { display:"flex", justifyContent:"space-between", fontSize:12, color:"#60a5fa" },
     track:   { height:3, background:"#1e3045", borderRadius:2, overflow:"hidden" },
-    fill:    (p) => ({ height:"100%", width:`${p}%`, background:"linear-gradient(90deg,#3b82f6,#8b5cf6)", transition:"width 0.3s ease" }),
+    fill:    (p) => ({ height:"100%", width:\`\${p}%\`, background:"linear-gradient(90deg,#3b82f6,#8b5cf6)", transition:"width 0.3s ease" }),
     tabs:    { display:"flex", gap:3, borderBottom:"1px solid #1e2d3d", marginBottom:2 },
     tab:     (a) => ({
                padding:"6px 15px", borderRadius:"6px 6px 0 0",
@@ -326,10 +436,10 @@ function SemanticInventory() {
     cName:   { fontSize:13, fontWeight:700, color:"#f1f5f9", marginBottom:3 },
     cDesc:   { fontSize:11, color:"#64748b", marginBottom:6, lineHeight:1.5 },
     cMeta:   { display:"flex", gap:6, flexWrap:"wrap", alignItems:"center" },
-    pill:    (c) => ({ fontSize:10, padding:"2px 8px", borderRadius:20, background:c.bg, color:c.text, border:`1px solid ${c.border}`, fontWeight:600 }),
+    pill:    (c) => ({ fontSize:10, padding:"2px 8px", borderRadius:20, background:c.bg, color:c.text, border:\`1px solid \${c.border}\`, fontWeight:600 }),
     pillG:   { fontSize:10, padding:"2px 8px", borderRadius:20, background:"#111d2e", color:"#94a3b8", border:"1px solid #1e3045" },
     sTrack:  { height:3, background:"#1e3045", borderRadius:2, overflow:"hidden", marginTop:7, marginBottom:2 },
-    sFill:   (s) => ({ height:"100%", width:`${Math.max(0,Math.min(100,s*100)).toFixed(1)}%`,
+    sFill:   (s) => ({ height:"100%", width:\`\${Math.max(0,Math.min(100,s*100)).toFixed(1)}%\`,
                        background: s>0.75 ? "linear-gradient(90deg,#3b82f6,#8b5cf6)" : s>0.50 ? "linear-gradient(90deg,#6366f1,#a78bfa)" : "linear-gradient(90deg,#334155,#475569)",
                        transition:"width 0.4s ease" }),
     sLbl:    (s) => ({ fontSize:10, color: s>0.75 ? "#93c5fd" : s>0.50 ? "#a78bfa" : "#475569" }),
@@ -337,14 +447,14 @@ function SemanticInventory() {
     err:     { background:"#2d0a0a", border:"1px solid #991b1b", borderRadius:6, padding:"9px 12px", fontSize:11, color:"#f87171", lineHeight:1.5 },
     toast:   (t) => ({ position:"fixed", bottom:18, right:18, zIndex:1000,
                        background: t==="error" ? "#2d0a0a" : "#0d2e1a",
-                       border:`1px solid ${t==="error" ? "#991b1b" : "#166534"}`,
+                       border:\`1px solid \${t==="error" ? "#991b1b" : "#166534"}\`,
                        color: t==="error" ? "#f87171" : "#4ade80",
                        padding:"10px 16px", borderRadius:8, fontSize:11,
                        boxShadow:"0 8px 32px rgba(0,0,0,0.5)", maxWidth:320, animation:"slideUp 0.2s ease" }),
     hint:    { marginTop:"auto", fontSize:10, color:"#2d4a63", lineHeight:1.7 },
     status:  (s) => ({ fontSize:10, padding:"4px 10px", borderRadius:6,
                       background: s==="ready" ? "#0d2e1a" : s==="loading" ? "#0a1a2d" : "#2d0a0a",
-                      border: `1px solid ${s==="ready" ? "#166534" : s==="loading" ? "#1e40af" : "#991b1b"}`,
+                      border: \`1px solid \${s==="ready" ? "#166534" : s==="loading" ? "#1e40af" : "#991b1b"}\`,
                       color: s==="ready" ? "#4ade80" : s==="loading" ? "#60a5fa" : "#f87171" }),
   };
 
@@ -407,7 +517,7 @@ function SemanticInventory() {
             <div style={$.form}>
               <textarea
                 style={{ ...$.ta, minHeight:50 }}
-                placeholder={"Try:\n\"something to clean dishes\"\n\"tools for home repair\"\n\"bedroom comfort items\""}
+                placeholder={"Try:\\n\\"something to clean dishes\\"\\n\\"tools for home repair\\"\\n\\"bedroom comfort items\\""}
                 value={searchQuery}
                 onChange={e => setSearchQuery(e.target.value)}
                 onKeyDown={e => { if (e.key==="Enter" && !e.shiftKey) { e.preventDefault(); if (!busy && inventory.length>0 && modelStatus==="ready") handleSearch(); } }}
@@ -470,7 +580,7 @@ function SemanticInventory() {
               </div>
               <div style={$.track}><div style={$.fill(seedPct)} /></div>
               <div style={{ fontSize:10, color:"#475569" }}>
-                {seedProg.current ? `Embedding: "${seedProg.current}"` : "Starting…"}
+                {seedProg.current ? \`Embedding: "\${seedProg.current}"\` : "Starting…"}
               </div>
             </div>
           )}
@@ -481,7 +591,7 @@ function SemanticInventory() {
               📦 Inventory ({inventory.length})
             </button>
             <button style={$.tab(activeTab==="search")} onClick={() => setActiveTab("search")}>
-              🔍 Results {results ? `(${results.length})` : ""}
+              🔍 Results {results ? \`(\${results.length})\` : ""}
             </button>
           </div>
 
@@ -574,3 +684,7 @@ if (window.transformersReady) {
 } else {
   window.addEventListener('transformers-ready', initApp, { once: true });
 }
+  </script>
+</body>
+</html>
+`;

@@ -363,9 +363,9 @@ function SemanticInventory() {
     pillG:   { fontSize:10, padding:"2px 8px", borderRadius:20, background:"#111d2e", color:"#94a3b8", border:"1px solid #1e3045" },
     sTrack:  { height:3, background:"#1e3045", borderRadius:2, overflow:"hidden", marginTop:7, marginBottom:2 },
     sFill:   (s) => ({ height:"100%", width:`${Math.max(0,Math.min(100,s*100)).toFixed(1)}%`,
-                       background: s>0.82 ? "linear-gradient(90deg,#3b82f6,#8b5cf6)" : s>0.65 ? "linear-gradient(90deg,#6366f1,#a78bfa)" : "linear-gradient(90deg,#334155,#475569)",
+                       background: s>0.75 ? "linear-gradient(90deg,#3b82f6,#8b5cf6)" : s>0.50 ? "linear-gradient(90deg,#6366f1,#a78bfa)" : "linear-gradient(90deg,#334155,#475569)",
                        transition:"width 0.4s ease" }),
-    sLbl:    (s) => ({ fontSize:10, color: s>0.82 ? "#93c5fd" : s>0.65 ? "#a78bfa" : "#475569" }),
+    sLbl:    (s) => ({ fontSize:10, color: s>0.75 ? "#93c5fd" : s>0.50 ? "#a78bfa" : "#475569" }),
     del:     { background:"none", border:"none", color:"#334155", cursor:"pointer", fontSize:13, padding:"2px 4px", borderRadius:4, flexShrink:0, lineHeight:1 },
     err:     { background:"#2d0a0a", border:"1px solid #991b1b", borderRadius:6, padding:"9px 12px", fontSize:11, color:"#f87171", lineHeight:1.5 },
     toast:   (t) => ({ position:"fixed", bottom:18, right:18, zIndex:1000,
@@ -568,7 +568,7 @@ function SemanticInventory() {
                       <div style={$.sTrack}><div style={$.sFill(sc)} /></div>
                       <div style={$.sLbl(sc)}>
                         similarity {(sc * 100).toFixed(1)}%
-                        {sc > 0.82 ? "  ✦ strong match" : sc > 0.65 ? "  · good match" : "  · partial match"}
+                        {sc > 0.75 ? "  ✦ strong match" : sc > 0.50 ? "  · good match" : "  · partial match"}
                       </div>
                     </>
                   )}
