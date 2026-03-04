@@ -771,6 +771,11 @@ function SemanticInventory() {
   const moveBoxes = knownBoxRecords
     .filter(b => normalizeLabel(b.room).toLowerCase() === normalizeLabel(boxMove.fromRoom || defaultRoom).toLowerCase())
     .map(b => b.name);
+  const moveReady = Boolean(normalizeLabel(boxMove.box)) && normalizeLabel(boxMove.fromRoom) && normalizeLabel(boxMove.toRoom)
+    && normalizeLabel(boxMove.fromRoom).toLowerCase() !== normalizeLabel(boxMove.toRoom).toLowerCase();
+  const moveSummary = moveReady
+    ? ('Move "' + prettyLabel(boxMove.box) + '" from ' + prettyLabel(boxMove.fromRoom) + ' to ' + prettyLabel(boxMove.toRoom))
+    : "Pick source room, box, and destination room";
 
   // ── Shared sub-components ─────────────────────────────────────────────────
   const matchLabel = s => s > 0.75 ? "✦ strong" : s > 0.50 ? "· good" : "· partial";
@@ -1080,8 +1085,12 @@ function SemanticInventory() {
                 </button>
               </div>
               <div style={{ fontSize:12, color:"#94a3b8", lineHeight:1.7 }}>
-                Move Box:
+                Move Box Between Rooms:
               </div>
+              <div style={{ fontSize:11, color:"#64748b", lineHeight:1.6 }}>
+                Move updates every item currently inside that box.
+              </div>
+              <div style={{ fontSize:12, color:"#94a3b8", lineHeight:1.7 }}>1. From room</div>
               <select
                 className="glass-input"
                 style={m.inp}
@@ -1090,6 +1099,7 @@ function SemanticInventory() {
               >
                 {knownRooms.map(room => <option key={room} value={room}>{room}</option>)}
               </select>
+              <div style={{ fontSize:12, color:"#94a3b8", lineHeight:1.7 }}>2. Box</div>
               <select
                 className="glass-input"
                 style={m.inp}
@@ -1099,6 +1109,7 @@ function SemanticInventory() {
                 <option value="">Select box in room</option>
                 {moveBoxes.map(box => <option key={box} value={box}>{box}</option>)}
               </select>
+              <div style={{ fontSize:12, color:"#94a3b8", lineHeight:1.7 }}>3. To room</div>
               <select
                 className="glass-input"
                 style={m.inp}
@@ -1107,12 +1118,21 @@ function SemanticInventory() {
               >
                 {knownRooms.map(room => <option key={room} value={room}>{room}</option>)}
               </select>
+              <div style={{ fontSize:11, color: moveReady ? "#67e8f9" : "#64748b", lineHeight:1.6 }}>
+                {moveSummary}
+              </div>
               <button
                 className="glass-btn-secondary"
-                style={{ ...m.btn("default"), color:"#67e8f9", border:"1px solid rgba(34, 211, 238, 0.35)" }}
+                style={{
+                  ...m.btn("default"),
+                  color: moveReady ? "#67e8f9" : "#64748b",
+                  border:"1px solid rgba(34, 211, 238, 0.35)",
+                  opacity: moveReady ? 1 : 0.55
+                }}
                 onClick={handleMoveBox}
+                disabled={!moveReady}
               >
-                Move Box
+                Move Box Now
               </button>
               <div style={{ fontSize:11, color:"#64748b", lineHeight:1.6 }}>
                 Stored items: {inventory.length}
