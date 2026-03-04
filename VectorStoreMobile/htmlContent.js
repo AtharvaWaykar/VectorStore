@@ -75,19 +75,19 @@ export const HTML = `<!DOCTYPE html>
 
     /* Glass Effect Utilities */
     .glass {
-      background: rgba(15, 23, 42, 0.6);
+      background: rgba(15, 23, 42, 0.72);
       backdrop-filter: blur(12px);
       -webkit-backdrop-filter: blur(12px);
-      border: 1px solid rgba(148, 163, 184, 0.1);
+      border: 1px solid rgba(148, 163, 184, 0.16);
       box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
     }
 
     .glass-card {
-      background: rgba(15, 23, 42, 0.5);
+      background: rgba(15, 23, 42, 0.78);
       backdrop-filter: blur(16px);
       -webkit-backdrop-filter: blur(16px);
-      border: 1px solid rgba(148, 163, 184, 0.12);
-      box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4), inset 0 1px 0 rgba(255, 255, 255, 0.05);
+      border: 1px solid rgba(148, 163, 184, 0.18);
+      box-shadow: 0 10px 28px rgba(0, 0, 0, 0.35), inset 0 1px 0 rgba(255, 255, 255, 0.04);
     }
 
     .glass-nav {
@@ -205,7 +205,7 @@ export const HTML = `<!DOCTYPE html>
 
     .safe-bottom { padding-bottom: env(safe-area-inset-bottom, 0px); }
 
-    ::placeholder { color: rgba(148, 163, 184, 0.5); }
+    ::placeholder { color: rgba(148, 163, 184, 0.7); }
   </style>
 </head>
 <body>
@@ -1371,40 +1371,41 @@ function SemanticInventory() {
 // ─── Mobile styles ────────────────────────────────────────────────────────────
 const FF = "'DM Mono','Courier New',monospace";
 const INPUT_FF = "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif";
+const TYPE = { xs: 12, sm: 13, md: 14, lg: 16, xl: 20 };
 const m = {
   root:    { display:"flex", flexDirection:"column", height:"100%",
              color:"#e2e8f0", fontFamily:FF, overflow:"hidden" },
   header:  { display:"flex", alignItems:"center", gap:10, padding:"14px 16px", flexShrink:0 },
   logo:    { width:34, height:34, background:"linear-gradient(135deg,#22d3ee,#8b5cf6)",
              borderRadius:8, display:"flex", alignItems:"center", justifyContent:"center", fontSize:16 },
-  title:   { fontSize:16, fontWeight:700, color:"#f1f5f9", letterSpacing:"-0.3px" },
-  subtitle:{ fontSize:9, color:"#64748b", letterSpacing:"1px" },
-  badge:   { borderRadius:20, padding:"4px 10px", fontSize:11, color:"#22d3ee" },
+  title:   { fontSize:TYPE.lg, fontWeight:700, color:"#f1f5f9", letterSpacing:"-0.2px" },
+  subtitle:{ fontSize:TYPE.xs, color:"#94a3b8", letterSpacing:"0.8px" },
+  badge:   { borderRadius:20, padding:"4px 10px", fontSize:TYPE.xs, color:"#22d3ee" },
   modelDot:(s) => ({ width:8, height:8, borderRadius:"50%", flexShrink:0,
              background: s==="ready" ? "#34d399" : s==="loading" ? "#22d3ee" : s==="error" ? "#f87171" : "#64748b",
              boxShadow: s==="ready" ? "0 0 8px rgba(52, 211, 153, 0.6)" : s==="loading" ? "0 0 8px rgba(34, 211, 238, 0.6)" : "none" }),
   banner:  { display:"flex", gap:10, alignItems:"center", borderBottom:"1px solid rgba(148, 163, 184, 0.1)",
              padding:"12px 16px", flexShrink:0, borderRadius: "0 0 12px 12px" },
   error:   { background:"rgba(127, 29, 29, 0.6)", borderBottom:"1px solid rgba(248, 113, 113, 0.2)",
-             padding:"10px 16px", fontSize:12, color:"#f87171", display:"flex", justifyContent:"space-between", flexShrink:0 },
+             padding:"10px 16px", fontSize:TYPE.sm, color:"#f87171", display:"flex", justifyContent:"space-between", flexShrink:0 },
   content: { flex:1, minHeight:0, overflowY:"auto", padding:"12px 14px", display:"flex", flexDirection:"column", gap:10,
              paddingBottom:20 },
   card:    { borderRadius:12, padding:"14px", display:"flex", gap:10, alignItems:"flex-start" },
-  cName:   { fontSize:15, fontWeight:700, color:"#f1f5f9", marginBottom:3 },
-  cDesc:   { fontSize:12, color:"#94a3b8", lineHeight:1.5 },
+  cName:   { fontSize:TYPE.lg, fontWeight:700, color:"#f1f5f9", marginBottom:3 },
+  cDesc:   { fontSize:TYPE.sm, color:"#94a3b8", lineHeight:1.55 },
   empty:   { display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center",
              flex:1, padding:40, textAlign:"center" },
   searchBox:{ borderBottom:"1px solid rgba(148, 163, 184, 0.1)", padding:"12px 14px",
               display:"flex", flexDirection:"column", gap:8, flexShrink:0, borderRadius: "0 0 12px 12px" },
-  searchInput:{ width:"100%", borderRadius:8, padding:"10px 12px", color:"#e2e8f0", fontSize:16, lineHeight:"1.35", fontFamily:INPUT_FF,
+  searchInput:{ width:"100%", borderRadius:8, padding:"10px 12px", color:"#e2e8f0", fontSize:TYPE.lg, lineHeight:"1.35", fontFamily:INPUT_FF,
                 resize:"none", boxSizing:"border-box" },
-  inp:     { width:"100%", borderRadius:8, padding:"12px 12px", color:"#e2e8f0", fontSize:16, lineHeight:"1.35", fontFamily:INPUT_FF,
+  inp:     { width:"100%", borderRadius:8, padding:"11px 12px", color:"#e2e8f0", fontSize:TYPE.md, lineHeight:"1.35", fontFamily:INPUT_FF,
              boxSizing:"border-box", display:"block" },
   addForm: { display:"flex", flexDirection:"column", gap:10 },
-  secLabel:{ fontSize:10, letterSpacing:"2px", color:"#64748b", textTransform:"uppercase" },
+  secLabel:{ fontSize:TYPE.xs, letterSpacing:"1.2px", color:"#94a3b8", textTransform:"uppercase", fontWeight:600 },
   btn:     (v, d) => ({
              width:"100%", padding:"13px", borderRadius:8, border:"none", cursor: d ? "not-allowed" : "pointer",
-             fontSize:14, fontFamily:FF, fontWeight:600, opacity: d ? 0.45 : 1,
+             fontSize:TYPE.md, fontFamily:FF, fontWeight:600, opacity: d ? 0.45 : 1,
              color:"#fff" }),
   nav:     { display:"flex", flexShrink:0, paddingBottom: "env(safe-area-inset-bottom, 0px)" },
   navBtn:  (a) => ({
@@ -1421,10 +1422,10 @@ const d = {
   header: { borderBottom:"1px solid rgba(148, 163, 184, 0.1)", padding:"18px 26px", display:"flex", alignItems:"center", gap:13 },
   logo:   { width:36, height:36, background:"linear-gradient(135deg,#22d3ee,#8b5cf6)", borderRadius:8,
             display:"flex", alignItems:"center", justifyContent:"center", fontSize:17, flexShrink:0 },
-  h1:     { fontSize:19, fontWeight:700, letterSpacing:"-0.4px", color:"#f1f5f9", margin:0 },
-  sub:    { fontSize:10, color:"#64748b", margin:"2px 0 0", letterSpacing:"0.5px" },
-  badge:  { marginLeft:"auto", borderRadius:20, padding:"4px 13px", fontSize:11, color:"#22d3ee" },
-  status: (s) => ({ fontSize:10, padding:"4px 10px", borderRadius:6,
+  h1:     { fontSize:20, fontWeight:700, letterSpacing:"-0.3px", color:"#f1f5f9", margin:0 },
+  sub:    { fontSize:TYPE.xs, color:"#94a3b8", margin:"2px 0 0", letterSpacing:"0.4px" },
+  badge:  { marginLeft:"auto", borderRadius:20, padding:"4px 13px", fontSize:TYPE.xs, color:"#22d3ee" },
+  status: (s) => ({ fontSize:TYPE.xs, padding:"5px 10px", borderRadius:6,
             background: s==="ready" ? "rgba(6, 78, 59, 0.5)" : s==="loading" ? "rgba(30, 58, 138, 0.5)" : "rgba(127, 29, 29, 0.5)",
             border: \`1px solid \${s==="ready" ? "rgba(16, 185, 129, 0.3)" : s==="loading" ? "rgba(59, 130, 246, 0.3)" : "rgba(248, 113, 113, 0.3)"}\`,
             color: s==="ready" ? "#34d399" : s==="loading" ? "#60a5fa" : "#f87171",
@@ -1432,17 +1433,17 @@ const d = {
   body:   { display:"grid", gridTemplateColumns:"310px 1fr", minHeight:"calc(100vh - 73px)" },
   side:   { borderRight:"1px solid rgba(148, 163, 184, 0.1)", padding:"18px 16px",
             display:"flex", flexDirection:"column", gap:16, overflowY:"auto", borderRadius: "0 12px 12px 0" },
-  secLbl: { fontSize:10, letterSpacing:"2px", color:"#64748b", textTransform:"uppercase", marginBottom:7 },
+  secLbl: { fontSize:TYPE.xs, letterSpacing:"1.2px", color:"#94a3b8", textTransform:"uppercase", marginBottom:7, fontWeight:600 },
   form:   { display:"flex", flexDirection:"column", gap:6 },
-  inp:    { width:"100%", borderRadius:6, padding:"7px 10px", color:"#e2e8f0", fontSize:12, outline:"none",
-            boxSizing:"border-box", fontFamily:FF, transition:"border-color 0.15s" },
-  ta:     { width:"100%", borderRadius:6, padding:"7px 10px", color:"#e2e8f0", fontSize:12, outline:"none",
-            boxSizing:"border-box", fontFamily:FF, resize:"vertical", minHeight:60 },
-  sel:    { width:"100%", borderRadius:6, padding:"7px 10px", color:"#e2e8f0", fontSize:12, outline:"none",
-            boxSizing:"border-box", fontFamily:FF, cursor:"pointer" },
+  inp:    { width:"100%", borderRadius:6, padding:"9px 10px", color:"#e2e8f0", fontSize:TYPE.md, outline:"none",
+            boxSizing:"border-box", fontFamily:INPUT_FF, transition:"border-color 0.15s" },
+  ta:     { width:"100%", borderRadius:6, padding:"9px 10px", color:"#e2e8f0", fontSize:TYPE.md, outline:"none",
+            boxSizing:"border-box", fontFamily:INPUT_FF, resize:"vertical", minHeight:72, lineHeight:1.4 },
+  sel:    { width:"100%", borderRadius:6, padding:"9px 10px", color:"#e2e8f0", fontSize:TYPE.md, outline:"none",
+            boxSizing:"border-box", fontFamily:INPUT_FF, cursor:"pointer" },
   btn:    (v, d) => ({
             width:"100%", padding:"8px 13px", borderRadius:6, border:"none",
-            cursor: d ? "not-allowed" : "pointer", fontSize:12, fontFamily:FF,
+            cursor: d ? "not-allowed" : "pointer", fontSize:TYPE.md, fontFamily:FF,
             fontWeight:600, letterSpacing:"0.3px", opacity: d ? 0.45 : 1, transition:"all 0.15s",
             background: v==="primary" ? "linear-gradient(135deg,#22d3ee,#8b5cf6)"
                       : v==="search"  ? "linear-gradient(135deg,#8b5cf6,#ec4899)" : "#1e2d3d",
@@ -1450,14 +1451,14 @@ const d = {
   main:   { padding:"18px 22px", display:"flex", flexDirection:"column", gap:12, overflowY:"auto" },
   banner: { borderRadius:8, padding:"12px 16px", display:"flex", gap:10, alignItems:"center", marginBottom:4 },
   tabs:   { display:"flex", gap:3, borderBottom:"1px solid rgba(148, 163, 184, 0.1)", marginBottom:2 },
-  tab:    (a) => ({ padding:"6px 15px", borderRadius:"6px 6px 0 0", border:"1px solid",
+  tab:    (a) => ({ padding:"8px 15px", borderRadius:"6px 6px 0 0", border:"1px solid",
             borderColor: a ? "rgba(139, 92, 246, 0.3)" : "transparent",
             background: a ? "rgba(30, 41, 59, 0.5)" : "transparent", color: a ? "#22d3ee" : "#64748b",
-            fontSize:11, cursor:"pointer", fontFamily:FF, fontWeight: a ? 600 : 400, marginBottom:-1 }),
+            fontSize:TYPE.sm, cursor:"pointer", fontFamily:FF, fontWeight: a ? 600 : 400, marginBottom:-1 }),
   card:   { borderRadius:10, padding:"12px 14px", display:"flex", gap:11, alignItems:"flex-start" },
-  cName:  { fontSize:13, fontWeight:700, color:"#f1f5f9", marginBottom:3 },
-  cDesc:  { fontSize:11, color:"#94a3b8", marginBottom:6, lineHeight:1.5 },
-  err:    { borderRadius:6, padding:"9px 12px", fontSize:11, color:"#f87171", lineHeight:1.5,
+  cName:  { fontSize:TYPE.md, fontWeight:700, color:"#f1f5f9", marginBottom:3 },
+  cDesc:  { fontSize:TYPE.sm, color:"#94a3b8", marginBottom:6, lineHeight:1.55 },
+  err:    { borderRadius:6, padding:"9px 12px", fontSize:TYPE.sm, color:"#f87171", lineHeight:1.5,
             background:"rgba(127, 29, 29, 0.5)", border:"1px solid rgba(248, 113, 113, 0.2)" },
 };
 
