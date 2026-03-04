@@ -249,8 +249,14 @@ function cosineSimilarity(a, b) {
 }
 
 function searchItems(queryVector, allItems, topK, minScore = 0.0) {
+  const queryHint = String(queryVector?.__queryText ?? "").toLowerCase().trim();
   const results = allItems
-    .map(item => ({ ...item, score: cosineSimilarity(queryVector, item.vector) }))
+    .map(item => {
+      const baseScore = cosineSimilarity(queryVector, item.vector);
+      const locationText = [item.room, item.box].filter(Boolean).join(" ").toLowerCase();
+      const locationBoost = queryHint && locationText.includes(queryHint) ? 0.08 : 0;
+      return { ...item, score: Math.min(1, baseScore + locationBoost) };
+    })
     .filter(item => item.score >= minScore)
     .sort((a, b) => b.score - a.score)
     .slice(0, topK);
@@ -262,6 +268,26 @@ let pipelineInstance = null, modelLoading = false;
 const loadQueue = [];
 const EMBEDDING_MODEL = 'Xenova/bge-small-en-v1.5';
 const BGE_QUERY_PREFIX = 'Represent this sentence for searching relevant passages: ';
+const DEFAULT_ROOMS = ["Garage", "Kitchen", "Bedroom", "Office", "Living Room", "Basement"];
+
+function normalizeLabel(value) {
+  return String(value ?? "").trim().replace(/\s+/g, " ");
+}
+
+function prettyLabel(value) {
+  return normalizeLabel(value).replace(/\b\w/g, c => c.toUpperCase());
+}
+
+function readJSONStorage(key, fallback) {
+  try {
+    const raw = window.localStorage.getItem(key);
+    if (!raw) return fallback;
+    const parsed = JSON.parse(raw);
+    return Array.isArray(fallback) ? (Array.isArray(parsed) ? parsed : fallback) : (parsed ?? fallback);
+  } catch {
+    return fallback;
+  }
+}
 
 async function waitForTransformers() {
   if (window.transformersReady) return;
@@ -410,7 +436,24 @@ function SemanticInventory() {
   const [loading,      setLoading]     = useState({ add: false, search: false });
   const [seeding,      setSeeding]     = useState(false);
   const [seedProg,     setSeedProg]    = useState({ done: 0, total: 0, current: "" });
-  const [addForm,      setAddForm]     = useState({ name: "", description: "", qty: "", unit: "", status: "In Stock" });
+  const [defaultRoom,  setDefaultRoom] = useState(() => {
+    try { return window.localStorage.getItem("vectorstock.defaultRoom") || "Garage"; }
+    catch { return "Garage"; }
+  });
+  const [rooms,        setRooms]       = useState(() => {
+    const saved = readJSONStorage("vectorstock.rooms", []);
+    const merged = [...DEFAULT_ROOMS, ...saved.map(prettyLabel)];
+    return Array.from(new Set(merged.map(prettyLabel)));
+  });
+  const [boxes,        setBoxes]       = useState(() => {
+    const saved = readJSONStorage("vectorstock.boxes", []);
+    return saved
+      .map(b => ({ id: b.id || crypto.randomUUID(), name: prettyLabel(b.name), room: prettyLabel(b.room) }))
+      .filter(b => b.name && b.room);
+  });
+  const [addForm,      setAddForm]     = useState({ name: "", description: "", qty: "", unit: "", room: defaultRoom, box: "", status: "In Stock" });
+  const [roomForm,     setRoomForm]    = useState("");
+  const [boxForm,      setBoxForm]     = useState({ room: defaultRoom, name: "" });
   const [searchQuery,  setSearchQuery] = useState("");
   const [topK,         setTopK]        = useState(5);
   const [activeTab,    setActiveTab]   = useState("inventory");
@@ -418,6 +461,7 @@ function SemanticInventory() {
   const [error,        setError]       = useState(null);
   const [modelStatus,  setModelStatus] = useState("initializing");
   const [isMobile,     setIsMobile]    = useState(window.innerWidth <= 768);
+  const [boxMove,      setBoxMove]     = useState({ fromRoom: defaultRoom, box: "", toRoom: defaultRoom });
   const cancelRef = useRef(false);
 
   useEffect(() => {
@@ -430,6 +474,35 @@ function SemanticInventory() {
     setNotif({ msg, type });
     setTimeout(() => setNotif(null), 3500);
   };
+
+  useEffect(() => {
+    try { window.localStorage.setItem("vectorstock.defaultRoom", defaultRoom); }
+    catch {}
+  }, [defaultRoom]);
+
+  useEffect(() => {
+    try { window.localStorage.setItem("vectorstock.rooms", JSON.stringify(rooms)); }
+    catch {}
+  }, [rooms]);
+
+  useEffect(() => {
+    try { window.localStorage.setItem("vectorstock.boxes", JSON.stringify(boxes)); }
+    catch {}
+  }, [boxes]);
+
+  useEffect(() => {
+    if (!rooms.length) return;
+    if (!rooms.includes(defaultRoom)) setDefaultRoom(rooms[0]);
+    if (!rooms.includes(addForm.room)) {
+      setAddForm(f => ({ ...f, room: rooms[0], box: "" }));
+    }
+    setBoxForm(f => ({ ...f, room: rooms.includes(f.room) ? f.room : rooms[0] }));
+    setBoxMove(m => ({
+      ...m,
+      fromRoom: rooms.includes(m.fromRoom) ? m.fromRoom : rooms[0],
+      toRoom: rooms.includes(m.toRoom) ? m.toRoom : rooms[0],
+    }));
+  }, [rooms, defaultRoom, addForm.room]);
 
   // ── Initialize model ──────────────────────────────────────────────────────
   useEffect(() => {
@@ -457,7 +530,11 @@ function SemanticInventory() {
         const persisted = await getAllItems();
         if (!live || cancelRef.current) return;
         if (persisted.length > 0) {
-          setInventory(persisted);
+          setInventory(persisted.map(item => ({
+            ...item,
+            room: item.room || "Unassigned",
+            box: item.box || "",
+          })));
           setSeeding(false);
           setSeedProg({ done: 0, total: 0, current: "" });
           return;
@@ -471,10 +548,14 @@ function SemanticInventory() {
           const item = SEED_ITEMS[i];
           if (live) setSeedProg({ done: i, total: SEED_ITEMS.length, current: item.name });
           try {
-            const vec = await embedText(\`\${item.name}. \${item.description}\`);
+            const seedRoom = "Unassigned";
+            const seedBox = "Starter Box";
+            const vec = await embedText(\`\${item.name}. \${item.description}. Box \${seedBox}. Room \${seedRoom}\`);
             const stored = await addItem({
               id: crypto.randomUUID(),
               ...item,
+              room: seedRoom,
+              box: seedBox,
               vector: vec,
               addedAt: new Date().toLocaleString(),
             });
@@ -499,27 +580,81 @@ function SemanticInventory() {
 
   // ── Add ───────────────────────────────────────────────────────────────────
   const handleAdd = async () => {
-    const name = String(addForm.name ?? "").trim();
-    if (!name) return toast("Item name is required.", "error");
+    const itemName = normalizeLabel(addForm.name);
+    if (!itemName) return toast("Item name is required.", "error");
     if (modelStatus !== "ready") return toast("Model not ready.", "error");
+    const selectedRoom = prettyLabel(addForm.room || defaultRoom);
+    if (!selectedRoom) return toast("Select a room.", "error");
+    if (!rooms.some(r => normalizeLabel(r).toLowerCase() === selectedRoom.toLowerCase())) {
+      return toast("Selected room does not exist.", "error");
+    }
     setLoading(l => ({ ...l, add: true })); setError(null);
     try {
       const desc = String(addForm.description ?? "").trim();
-      const vec  = await embedText([name, desc].filter(Boolean).join(". "));
+      const selectedBox = prettyLabel(addForm.box);
+      const vec  = await embedText([
+        itemName,
+        desc,
+        selectedBox ? ("Box " + selectedBox) : "",
+        "Room " + selectedRoom,
+      ].filter(Boolean).join(". "));
       const stored = await addItem({
-        id: crypto.randomUUID(), name, description: desc,
+        id: crypto.randomUUID(),
+        name: itemName,
+        room: selectedRoom,
+        box: selectedBox,
+        description: desc,
         qty: String(addForm.qty ?? "").trim(), unit: String(addForm.unit ?? "").trim(),
         status: addForm.status, vector: vec, addedAt: new Date().toLocaleString(),
       });
       setInventory(inv => [...inv, stored]);
-      setAddForm({ name: "", description: "", qty: "", unit: "", status: "In Stock" });
-      toast(\`"\${name}" stored ✓\`);
+      setAddForm({ name: "", description: "", qty: "", unit: "", room: selectedRoom, box: "", status: "In Stock" });
+      const loc = [stored.room, stored.box].filter(Boolean).join(" › ");
+      toast(\`"\${stored.name}" stored in \${loc || "Unassigned"} ✓\`);
       if (isMobile) setActiveTab("inventory");
     } catch (e) {
       setError(String(e?.message ?? e)); toast("Embedding failed.", "error");
     } finally {
       setLoading(l => ({ ...l, add: false }));
     }
+  };
+
+  const handleAddRoom = () => {
+    const roomName = prettyLabel(roomForm);
+    if (!roomName) return toast("Enter a room name.", "error");
+    if (rooms.some(r => normalizeLabel(r).toLowerCase() === roomName.toLowerCase())) {
+      return toast("Room already exists.", "error");
+    }
+    setRooms(prev => [...prev, roomName]);
+    setRoomForm("");
+    setAddForm(f => ({ ...f, room: roomName, box: "" }));
+    setBoxForm(f => ({ ...f, room: roomName }));
+    toast(\`Room "\${roomName}" added.\`);
+  };
+
+  const handleAddBox = () => {
+    const boxName = prettyLabel(boxForm.name);
+    const boxRoom = prettyLabel(boxForm.room || defaultRoom);
+    if (!boxName) return toast("Enter a box name.", "error");
+    if (!boxRoom) return toast("Select a room for the box.", "error");
+    if (!rooms.some(r => normalizeLabel(r).toLowerCase() === boxRoom.toLowerCase())) {
+      return toast("Room does not exist.", "error");
+    }
+    const duplicate = boxes.some(b =>
+      normalizeLabel(b.name).toLowerCase() === boxName.toLowerCase()
+      && normalizeLabel(b.room).toLowerCase() === boxRoom.toLowerCase()
+    );
+    const duplicateFromItems = inventory.some(item =>
+      normalizeLabel(item.box).toLowerCase() === boxName.toLowerCase()
+      && normalizeLabel(item.room).toLowerCase() === boxRoom.toLowerCase()
+    );
+    if (duplicate || duplicateFromItems) return toast("Box already exists in this room.", "error");
+    setBoxes(prev => [...prev, { id: crypto.randomUUID(), name: boxName, room: boxRoom }]);
+    setBoxForm(prev => ({ ...prev, name: "" }));
+    if (prettyLabel(addForm.room || defaultRoom) === boxRoom) {
+      setAddForm(f => ({ ...f, box: boxName }));
+    }
+    toast(\`Box "\${boxName}" added to \${boxRoom}.\`);
   };
 
   // ── Search ────────────────────────────────────────────────────────────────
@@ -531,6 +666,7 @@ function SemanticInventory() {
     setLoading(l => ({ ...l, search: true })); setResults(null); setError(null);
     try {
       const qVec = await embedQuery(q);
+      qVec.__queryText = q;
       const k = Math.max(1, Math.min(topK, inventory.length));
       setResults(searchItems(qVec, inventory, k));
     } catch (e) {
@@ -565,9 +701,76 @@ function SemanticInventory() {
     }
   };
 
+  const handleMoveBox = async () => {
+    const sourceRoom = prettyLabel(boxMove.fromRoom || defaultRoom || "Garage");
+    const box = prettyLabel(boxMove.box);
+    const targetRoom = prettyLabel(boxMove.toRoom || defaultRoom || "Garage");
+    if (!sourceRoom) return toast("Select source room.", "error");
+    if (!box) return toast("Select a box to move.", "error");
+    if (!targetRoom) return toast("Select destination room.", "error");
+    if (sourceRoom.toLowerCase() === targetRoom.toLowerCase()) return toast("Choose a different destination room.", "error");
+
+    const changed = inventory.filter(item =>
+      normalizeLabel(item.box).toLowerCase() === box.toLowerCase()
+      && prettyLabel(item.room).toLowerCase() === sourceRoom.toLowerCase()
+    );
+    if (!changed.length) return toast("No items found in selected box.", "error");
+    try {
+      const updatedRecords = changed.map(item => ({ ...item, room: targetRoom }));
+      await Promise.all(updatedRecords.map(item => addItem(item)));
+      setInventory(prev => prev.map(item =>
+        normalizeLabel(item.box).toLowerCase() === box.toLowerCase()
+        && prettyLabel(item.room).toLowerCase() === sourceRoom.toLowerCase()
+          ? { ...item, room: targetRoom }
+          : item
+      ));
+      setResults(prev => prev ? prev.map(item =>
+        normalizeLabel(item.box).toLowerCase() === box.toLowerCase()
+        && prettyLabel(item.room).toLowerCase() === sourceRoom.toLowerCase()
+          ? { ...item, room: targetRoom }
+          : item
+      ) : prev);
+      setBoxes(prev => prev.map(b =>
+        normalizeLabel(b.name).toLowerCase() === box.toLowerCase()
+        && normalizeLabel(b.room).toLowerCase() === sourceRoom.toLowerCase()
+          ? { ...b, room: targetRoom }
+          : b
+      ));
+      setBoxMove(prev => ({ ...prev, fromRoom: sourceRoom, box: "", toRoom: targetRoom }));
+      toast(\`Moved box "\${box}" from \${sourceRoom} to \${targetRoom}.\`);
+    } catch (e) {
+      setError(\`Move failed: \${String(e?.message ?? e)}\`);
+      toast("Move failed.", "error");
+    }
+  };
+
   const busy = loading.add || loading.search;
   const seedPct = seedProg.total > 0 ? (seedProg.done / seedProg.total) * 100 : 0;
   const displayItems = (activeTab === "search" && results !== null) ? results : inventory;
+  const knownRooms = Array.from(new Set([
+    ...DEFAULT_ROOMS.map(prettyLabel),
+    ...rooms.map(prettyLabel),
+    ...inventory.map(i => prettyLabel(i.room)).filter(Boolean),
+    prettyLabel(defaultRoom),
+  ])).filter(Boolean);
+
+  const knownBoxRecords = Array.from(new Map([
+    ...boxes.map(b => ({ name: prettyLabel(b.name), room: prettyLabel(b.room) })),
+    ...inventory
+      .filter(i => normalizeLabel(i.box))
+      .map(i => ({ name: prettyLabel(i.box), room: prettyLabel(i.room || defaultRoom) })),
+  ].map(b => {
+    const key = normalizeLabel(b.room).toLowerCase() + "::" + normalizeLabel(b.name).toLowerCase();
+    return [key, b];
+  })).values());
+
+  const addItemBoxes = knownBoxRecords
+    .filter(b => normalizeLabel(b.room).toLowerCase() === normalizeLabel(addForm.room || defaultRoom).toLowerCase())
+    .map(b => b.name);
+
+  const moveBoxes = knownBoxRecords
+    .filter(b => normalizeLabel(b.room).toLowerCase() === normalizeLabel(boxMove.fromRoom || defaultRoom).toLowerCase())
+    .map(b => b.name);
 
   // ── Shared sub-components ─────────────────────────────────────────────────
   const matchLabel = s => s > 0.75 ? "✦ strong" : s > 0.50 ? "· good" : "· partial";
@@ -598,6 +801,15 @@ function SemanticInventory() {
                 border:"1px solid rgba(148, 163, 184, 0.15)"
               }}>
                 {[item.qty, item.unit].filter(Boolean).join(" ")}
+              </span>
+            )}
+            {(item.room || item.box) && (
+              <span style={{
+                fontSize:11, padding:"4px 10px", borderRadius:20,
+                background:"rgba(14, 165, 233, 0.12)", color:"#67e8f9",
+                border:"1px solid rgba(34, 211, 238, 0.25)"
+              }}>
+                {[item.room, item.box].filter(Boolean).join(" › ")}
               </span>
             )}
           </div>
@@ -804,6 +1016,104 @@ function SemanticInventory() {
                 value={topK}
                 onChange={e => setTopK(Math.max(1, parseInt(e.target.value, 10) || 1))}
               />
+              <div style={{ fontSize:12, color:"#94a3b8", lineHeight:1.7 }}>
+                Default Room:
+              </div>
+              <select
+                className="glass-input"
+                style={m.inp}
+                value={defaultRoom}
+                onChange={e => {
+                  const next = prettyLabel(e.target.value);
+                  setDefaultRoom(next);
+                  setAddForm(f => ({ ...f, room: next, box: "" }));
+                  setBoxForm(f => ({ ...f, room: next }));
+                  setBoxMove(prev => ({ ...prev, fromRoom: next, toRoom: next, box: "" }));
+                }}
+              >
+                {knownRooms.map(room => <option key={room} value={room}>{room}</option>)}
+              </select>
+              <div style={{ fontSize:12, color:"#94a3b8", lineHeight:1.7 }}>
+                Add Room:
+              </div>
+              <div style={{ display:"flex", gap:8 }}>
+                <input
+                  className="glass-input"
+                  style={{ ...m.inp, flex:1 }}
+                  placeholder="Room name"
+                  value={roomForm}
+                  onChange={e => setRoomForm(e.target.value)}
+                />
+                <button
+                  className="glass-btn-secondary"
+                  style={{ ...m.btn("default"), width:110, color:"#67e8f9", border:"1px solid rgba(34, 211, 238, 0.35)" }}
+                  onClick={handleAddRoom}
+                >
+                  Add Room
+                </button>
+              </div>
+              <div style={{ fontSize:12, color:"#94a3b8", lineHeight:1.7 }}>
+                Add Box (assign to room):
+              </div>
+              <select
+                className="glass-input"
+                style={m.inp}
+                value={boxForm.room}
+                onChange={e => setBoxForm(f => ({ ...f, room: prettyLabel(e.target.value) }))}
+              >
+                {knownRooms.map(room => <option key={room} value={room}>{room}</option>)}
+              </select>
+              <div style={{ display:"flex", gap:8 }}>
+                <input
+                  className="glass-input"
+                  style={{ ...m.inp, flex:1 }}
+                  placeholder="Box name"
+                  value={boxForm.name}
+                  onChange={e => setBoxForm(f => ({ ...f, name: e.target.value }))}
+                />
+                <button
+                  className="glass-btn-secondary"
+                  style={{ ...m.btn("default"), width:110, color:"#67e8f9", border:"1px solid rgba(34, 211, 238, 0.35)" }}
+                  onClick={handleAddBox}
+                >
+                  Add Box
+                </button>
+              </div>
+              <div style={{ fontSize:12, color:"#94a3b8", lineHeight:1.7 }}>
+                Move Box:
+              </div>
+              <select
+                className="glass-input"
+                style={m.inp}
+                value={boxMove.fromRoom}
+                onChange={e => setBoxMove(prev => ({ ...prev, fromRoom: prettyLabel(e.target.value), box: "" }))}
+              >
+                {knownRooms.map(room => <option key={room} value={room}>{room}</option>)}
+              </select>
+              <select
+                className="glass-input"
+                style={m.inp}
+                value={boxMove.box}
+                onChange={e => setBoxMove(prev => ({ ...prev, box: e.target.value }))}
+              >
+                <option value="">Select box in room</option>
+                {moveBoxes.map(box => <option key={box} value={box}>{box}</option>)}
+              </select>
+              <select
+                className="glass-input"
+                style={m.inp}
+                value={boxMove.toRoom}
+                onChange={e => setBoxMove(prev => ({ ...prev, toRoom: prettyLabel(e.target.value) }))}
+              >
+                {knownRooms.map(room => <option key={room} value={room}>{room}</option>)}
+              </select>
+              <button
+                className="glass-btn-secondary"
+                style={{ ...m.btn("default"), color:"#67e8f9", border:"1px solid rgba(34, 211, 238, 0.35)" }}
+                onClick={handleMoveBox}
+              >
+                Move Box
+              </button>
               <div style={{ fontSize:11, color:"#64748b", lineHeight:1.6 }}>
                 Stored items: {inventory.length}
               </div>
@@ -839,6 +1149,27 @@ function SemanticInventory() {
               <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:8 }}>
                 <input className="glass-input" style={m.inp} placeholder="Qty"  value={addForm.qty}  onChange={e => setAddForm(f => ({ ...f, qty: e.target.value }))}  disabled={modelStatus !== "ready"} />
                 <input className="glass-input" style={m.inp} placeholder="Unit" value={addForm.unit} onChange={e => setAddForm(f => ({ ...f, unit: e.target.value }))} disabled={modelStatus !== "ready"} />
+              </div>
+              <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:8 }}>
+                <select
+                  className="glass-input"
+                  style={m.inp}
+                  value={addForm.room}
+                  onChange={e => setAddForm(f => ({ ...f, room: prettyLabel(e.target.value), box: "" }))}
+                  disabled={modelStatus !== "ready"}
+                >
+                  {knownRooms.map(room => <option key={room} value={room}>{room}</option>)}
+                </select>
+                <select
+                  className="glass-input"
+                  style={m.inp}
+                  value={addForm.box}
+                  onChange={e => setAddForm(f => ({ ...f, box: e.target.value }))}
+                  disabled={modelStatus !== "ready"}
+                >
+                  <option value="">No box</option>
+                  {addItemBoxes.map(box => <option key={box} value={box}>{box}</option>)}
+                </select>
               </div>
               <div style={{ display:"flex", flexWrap:"wrap", gap:6 }}>
                 {STATUSES.map(st => {
@@ -924,6 +1255,15 @@ function SemanticInventory() {
               <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:6 }}>
                 <input className="glass-input" style={d.inp} placeholder="Qty"  value={addForm.qty}  onChange={e => setAddForm(f => ({ ...f, qty: e.target.value }))}  disabled={modelStatus !== "ready"} />
                 <input className="glass-input" style={d.inp} placeholder="Unit" value={addForm.unit} onChange={e => setAddForm(f => ({ ...f, unit: e.target.value }))} disabled={modelStatus !== "ready"} />
+              </div>
+              <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:6 }}>
+                <select className="glass-input" style={d.sel} value={addForm.room} onChange={e => setAddForm(f => ({ ...f, room: prettyLabel(e.target.value), box: "" }))} disabled={modelStatus !== "ready"}>
+                  {knownRooms.map(room => <option key={room} value={room}>{room}</option>)}
+                </select>
+                <select className="glass-input" style={d.sel} value={addForm.box} onChange={e => setAddForm(f => ({ ...f, box: e.target.value }))} disabled={modelStatus !== "ready"}>
+                  <option value="">No box</option>
+                  {addItemBoxes.map(box => <option key={box} value={box}>{box}</option>)}
+                </select>
               </div>
               <select className="glass-input" style={d.sel} value={addForm.status} onChange={e => setAddForm(f => ({ ...f, status: e.target.value }))} disabled={modelStatus !== "ready"}>
                 {STATUSES.map(st => <option key={st}>{st}</option>)}
