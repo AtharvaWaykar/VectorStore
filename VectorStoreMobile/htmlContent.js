@@ -2,12 +2,12 @@ export const HTML = `<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
   <title>VectorStock - Semantic Inventory</title>
   <style>
     @import url('https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500;600&display=swap');
     *, *::before, *::after { box-sizing: border-box; }
-    html, body { height: 100%; overflow: hidden; overscroll-behavior: none; }
+    html, body { height: 100%; overflow: hidden; overscroll-behavior: none; -webkit-text-size-adjust: 100%; }
     body { margin: 0; padding: 0; -webkit-font-smoothing: antialiased; }
 
     /* Animated Gradient Background */
@@ -108,7 +108,7 @@ export const HTML = `<!DOCTYPE html>
 
     .glass-input:focus {
       border-color: rgba(34, 211, 238, 0.5);
-      box-shadow: 0 0 0 3px rgba(34, 211, 238, 0.15), 0 0 20px rgba(34, 211, 238, 0.1);
+      box-shadow: 0 0 0 1px rgba(34, 211, 238, 0.35);
       background: rgba(15, 23, 42, 0.7);
     }
 
@@ -190,6 +190,9 @@ export const HTML = `<!DOCTYPE html>
     input:focus, textarea:focus, select:focus {
       outline: none;
     }
+    @media (max-width: 768px) {
+      input, textarea, select { font-size: 16px !important; line-height: 1.35; }
+    }
 
     button:not(:disabled):active {
       filter: brightness(0.9);
@@ -257,6 +260,8 @@ function searchItems(queryVector, allItems, topK, minScore = 0.0) {
 // ─── Vector math ──────────────────────────────────────────────────────────────
 let pipelineInstance = null, modelLoading = false;
 const loadQueue = [];
+const EMBEDDING_MODEL = 'Xenova/bge-small-en-v1.5';
+const BGE_QUERY_PREFIX = 'Represent this sentence for searching relevant passages: ';
 
 async function waitForTransformers() {
   if (window.transformersReady) return;
@@ -269,7 +274,7 @@ async function getEmbeddingPipeline() {
   modelLoading = true;
   try {
     await waitForTransformers();
-    pipelineInstance = await window.transformersPipeline('feature-extraction', 'Xenova/all-MiniLM-L6-v2', { quantized: true });
+    pipelineInstance = await window.transformersPipeline('feature-extraction', EMBEDDING_MODEL, { quantized: true });
     loadQueue.forEach(r => r(pipelineInstance)); loadQueue.length = 0;
     return pipelineInstance;
   } catch (e) { modelLoading = false; throw new Error(\`Failed to load embedding model: \${e.message}\`); }
@@ -281,6 +286,10 @@ async function embedText(text) {
   const pipe = await getEmbeddingPipeline();
   const output = await pipe(safeText, { pooling: 'mean', normalize: true });
   return Array.from(output.data);
+}
+
+async function embedQuery(text) {
+  return embedText(\`\${BGE_QUERY_PREFIX}\${String(text ?? "").trim()}\`);
 }
 
 // ─── IndexedDB storage ────────────────────────────────────────────────────────
@@ -521,7 +530,7 @@ function SemanticInventory() {
     if (modelStatus !== "ready") return toast("Model not ready.", "error");
     setLoading(l => ({ ...l, search: true })); setResults(null); setError(null);
     try {
-      const qVec = await embedText(q);
+      const qVec = await embedQuery(q);
       const k = Math.max(1, Math.min(topK, inventory.length));
       setResults(searchItems(qVec, inventory, k));
     } catch (e) {
@@ -539,6 +548,20 @@ function SemanticInventory() {
     } catch (e) {
       setError(\`Delete failed: \${String(e?.message ?? e)}\`);
       toast("Delete failed.", "error");
+    }
+  };
+
+  const handleClearAllData = async () => {
+    try {
+      await clearAll();
+      setInventory([]);
+      setResults(null);
+      setSearchQuery("");
+      setActiveTab("inventory");
+      toast("All saved items cleared.");
+    } catch (e) {
+      setError(\`Clear failed: \${String(e?.message ?? e)}\`);
+      toast("Clear failed.", "error");
     }
   };
 
@@ -617,7 +640,7 @@ function SemanticInventory() {
           <div className="spin" />
           <div style={{ flex:1 }}>
             <div style={{ fontSize:12, color:"#22d3ee", marginBottom:3 }}>Loading embedding model…</div>
-            <div style={{ fontSize:10, color:"#64748b" }}>Downloading all-MiniLM-L6-v2 (~25MB, once only)</div>
+            <div style={{ fontSize:10, color:"#64748b" }}>Downloading bge-small-en-v1.5 (~25MB, once only)</div>
           </div>
         </div>
       )}
@@ -720,18 +743,6 @@ function SemanticInventory() {
                   disabled={modelStatus !== "ready"}
                 />
                 <div style={{ display:"flex", gap:8, alignItems:"center" }}>
-                  <div style={{ display:"flex", alignItems:"center", gap:6, fontSize:12, color:"#64748b" }}>
-                    <span>Top</span>
-                    <input
-                      type="number" min={1} max={Math.max(inventory.length,1)}
-                      className="glass-input"
-                      style={{ ...m.inp, width:52, textAlign:"center" }}
-                      value={topK}
-                      onChange={e => setTopK(Math.max(1, parseInt(e.target.value) || 1))}
-                      disabled={modelStatus !== "ready"}
-                    />
-                    <span>results</span>
-                  </div>
                   <button
                     className="glass-btn"
                     style={{ ...m.btn("search"), flex:1 }}
@@ -767,6 +778,43 @@ function SemanticInventory() {
 
               {!loading.search && results !== null && results.map(item => <ItemCard key={item.id} item={item} />)}
             </>
+          )}
+
+          {/* ── Settings tab ── */}
+          {activeTab === "settings" && (
+            <div className="glass" style={m.addForm}>
+              <div style={m.secLabel}>SETTINGS</div>
+              <div style={{ fontSize:12, color:"#94a3b8", lineHeight:1.7 }}>
+                Model:
+                <div style={{ color:"#e2e8f0", marginTop:3 }}>{EMBEDDING_MODEL}</div>
+              </div>
+              <div style={{ fontSize:12, color:"#94a3b8", lineHeight:1.7 }}>
+                Status:
+                <div style={{ color: modelStatus === "ready" ? "#34d399" : modelStatus === "error" ? "#f87171" : "#22d3ee", marginTop:3 }}>
+                  {modelStatus}
+                </div>
+              </div>
+              <div style={{ fontSize:12, color:"#94a3b8", lineHeight:1.7 }}>
+                Search Results (Top K):
+              </div>
+              <input
+                type="number" min={1} max={Math.max(inventory.length, 1)}
+                className="glass-input"
+                style={{ ...m.inp, width:90 }}
+                value={topK}
+                onChange={e => setTopK(Math.max(1, parseInt(e.target.value, 10) || 1))}
+              />
+              <div style={{ fontSize:11, color:"#64748b", lineHeight:1.6 }}>
+                Stored items: {inventory.length}
+              </div>
+              <button
+                className="glass-btn-secondary"
+                style={{ ...m.btn("default"), color:"#f87171", border:"1px solid rgba(248, 113, 113, 0.35)" }}
+                onClick={handleClearAllData}
+              >
+                Clear All Stored Items
+              </button>
+            </div>
           )}
 
           {/* ── Add tab ── */}
@@ -827,6 +875,7 @@ function SemanticInventory() {
           {[
             { key: "inventory", icon: "📦", label: \`Inventory\` },
             { key: "search",    icon: "🔍", label: "Search"    },
+            { key: "settings",  icon: "⚙️", label: "Settings"  },
             { key: "add",       icon: "＋", label: "Add Item"  },
           ].map(t => (
             <button
@@ -919,7 +968,7 @@ function SemanticInventory() {
             </div>
           )}
           <div style={{ marginTop:"auto", fontSize:10, color:"#475569", lineHeight:1.7 }}>
-            Embeddings via Transformers.js (all-MiniLM-L6-v2) · local, in-browser.<br />
+            Embeddings via Transformers.js (bge-small-en-v1.5) · local, in-browser.<br />
             No exact names needed — concepts cluster in vector space.
           </div>
         </div>
@@ -961,6 +1010,7 @@ function SemanticInventory() {
 
 // ─── Mobile styles ────────────────────────────────────────────────────────────
 const FF = "'DM Mono','Courier New',monospace";
+const INPUT_FF = "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif";
 const m = {
   root:    { display:"flex", flexDirection:"column", height:"100%",
              color:"#e2e8f0", fontFamily:FF, overflow:"hidden" },
@@ -986,9 +1036,9 @@ const m = {
              flex:1, padding:40, textAlign:"center" },
   searchBox:{ borderBottom:"1px solid rgba(148, 163, 184, 0.1)", padding:"12px 14px",
               display:"flex", flexDirection:"column", gap:8, flexShrink:0, borderRadius: "0 0 12px 12px" },
-  searchInput:{ width:"100%", borderRadius:8, padding:"10px 12px", color:"#e2e8f0", fontSize:13, fontFamily:FF,
+  searchInput:{ width:"100%", borderRadius:8, padding:"10px 12px", color:"#e2e8f0", fontSize:16, lineHeight:"1.35", fontFamily:INPUT_FF,
                 resize:"none", boxSizing:"border-box" },
-  inp:     { width:"100%", borderRadius:8, padding:"12px 12px", color:"#e2e8f0", fontSize:13, fontFamily:FF,
+  inp:     { width:"100%", borderRadius:8, padding:"12px 12px", color:"#e2e8f0", fontSize:16, lineHeight:"1.35", fontFamily:INPUT_FF,
              boxSizing:"border-box", display:"block" },
   addForm: { display:"flex", flexDirection:"column", gap:10 },
   secLabel:{ fontSize:10, letterSpacing:"2px", color:"#64748b", textTransform:"uppercase" },
