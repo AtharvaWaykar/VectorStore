@@ -75,19 +75,19 @@ export const HTML = `<!DOCTYPE html>
 
     /* Glass Effect Utilities */
     .glass {
-      background: rgba(15, 23, 42, 0.6);
+      background: rgba(15, 23, 42, 0.72);
       backdrop-filter: blur(12px);
       -webkit-backdrop-filter: blur(12px);
-      border: 1px solid rgba(148, 163, 184, 0.1);
+      border: 1px solid rgba(148, 163, 184, 0.16);
       box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
     }
 
     .glass-card {
-      background: rgba(15, 23, 42, 0.5);
+      background: rgba(15, 23, 42, 0.78);
       backdrop-filter: blur(16px);
       -webkit-backdrop-filter: blur(16px);
-      border: 1px solid rgba(148, 163, 184, 0.12);
-      box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4), inset 0 1px 0 rgba(255, 255, 255, 0.05);
+      border: 1px solid rgba(148, 163, 184, 0.18);
+      box-shadow: 0 10px 28px rgba(0, 0, 0, 0.35), inset 0 1px 0 rgba(255, 255, 255, 0.04);
     }
 
     .glass-nav {
@@ -205,7 +205,7 @@ export const HTML = `<!DOCTYPE html>
 
     .safe-bottom { padding-bottom: env(safe-area-inset-bottom, 0px); }
 
-    ::placeholder { color: rgba(148, 163, 184, 0.5); }
+    ::placeholder { color: rgba(148, 163, 184, 0.7); }
   </style>
 </head>
 <body>
@@ -249,8 +249,14 @@ function cosineSimilarity(a, b) {
 }
 
 function searchItems(queryVector, allItems, topK, minScore = 0.0) {
+  const queryHint = String(queryVector?.__queryText ?? "").toLowerCase().trim();
   const results = allItems
-    .map(item => ({ ...item, score: cosineSimilarity(queryVector, item.vector) }))
+    .map(item => {
+      const baseScore = cosineSimilarity(queryVector, item.vector);
+      const locationText = [item.room, item.box].filter(Boolean).join(" ").toLowerCase();
+      const locationBoost = queryHint && locationText.includes(queryHint) ? 0.08 : 0;
+      return { ...item, score: Math.min(1, baseScore + locationBoost) };
+    })
     .filter(item => item.score >= minScore)
     .sort((a, b) => b.score - a.score)
     .slice(0, topK);
@@ -262,6 +268,26 @@ let pipelineInstance = null, modelLoading = false;
 const loadQueue = [];
 const EMBEDDING_MODEL = 'Xenova/bge-small-en-v1.5';
 const BGE_QUERY_PREFIX = 'Represent this sentence for searching relevant passages: ';
+const DEFAULT_ROOMS = ["Garage", "Kitchen", "Bedroom", "Office", "Living Room", "Basement"];
+
+function normalizeLabel(value) {
+  return String(value ?? "").trim().replace(/\s+/g, " ");
+}
+
+function prettyLabel(value) {
+  return normalizeLabel(value).replace(/\b\w/g, c => c.toUpperCase());
+}
+
+function readJSONStorage(key, fallback) {
+  try {
+    const raw = window.localStorage.getItem(key);
+    if (!raw) return fallback;
+    const parsed = JSON.parse(raw);
+    return Array.isArray(fallback) ? (Array.isArray(parsed) ? parsed : fallback) : (parsed ?? fallback);
+  } catch {
+    return fallback;
+  }
+}
 
 async function waitForTransformers() {
   if (window.transformersReady) return;
@@ -410,7 +436,24 @@ function SemanticInventory() {
   const [loading,      setLoading]     = useState({ add: false, search: false });
   const [seeding,      setSeeding]     = useState(false);
   const [seedProg,     setSeedProg]    = useState({ done: 0, total: 0, current: "" });
-  const [addForm,      setAddForm]     = useState({ name: "", description: "", qty: "", unit: "", status: "In Stock" });
+  const [defaultRoom,  setDefaultRoom] = useState(() => {
+    try { return window.localStorage.getItem("vectorstock.defaultRoom") || "Garage"; }
+    catch { return "Garage"; }
+  });
+  const [rooms,        setRooms]       = useState(() => {
+    const saved = readJSONStorage("vectorstock.rooms", []);
+    const merged = [...DEFAULT_ROOMS, ...saved.map(prettyLabel)];
+    return Array.from(new Set(merged.map(prettyLabel)));
+  });
+  const [boxes,        setBoxes]       = useState(() => {
+    const saved = readJSONStorage("vectorstock.boxes", []);
+    return saved
+      .map(b => ({ id: b.id || crypto.randomUUID(), name: prettyLabel(b.name), room: prettyLabel(b.room) }))
+      .filter(b => b.name && b.room);
+  });
+  const [addForm,      setAddForm]     = useState({ name: "", description: "", qty: "", unit: "", room: defaultRoom, box: "", status: "In Stock" });
+  const [roomForm,     setRoomForm]    = useState("");
+  const [boxForm,      setBoxForm]     = useState({ room: defaultRoom, name: "" });
   const [searchQuery,  setSearchQuery] = useState("");
   const [topK,         setTopK]        = useState(5);
   const [activeTab,    setActiveTab]   = useState("inventory");
@@ -418,6 +461,7 @@ function SemanticInventory() {
   const [error,        setError]       = useState(null);
   const [modelStatus,  setModelStatus] = useState("initializing");
   const [isMobile,     setIsMobile]    = useState(window.innerWidth <= 768);
+  const [boxMove,      setBoxMove]     = useState({ fromRoom: defaultRoom, box: "", toRoom: defaultRoom });
   const cancelRef = useRef(false);
 
   useEffect(() => {
@@ -430,6 +474,35 @@ function SemanticInventory() {
     setNotif({ msg, type });
     setTimeout(() => setNotif(null), 3500);
   };
+
+  useEffect(() => {
+    try { window.localStorage.setItem("vectorstock.defaultRoom", defaultRoom); }
+    catch {}
+  }, [defaultRoom]);
+
+  useEffect(() => {
+    try { window.localStorage.setItem("vectorstock.rooms", JSON.stringify(rooms)); }
+    catch {}
+  }, [rooms]);
+
+  useEffect(() => {
+    try { window.localStorage.setItem("vectorstock.boxes", JSON.stringify(boxes)); }
+    catch {}
+  }, [boxes]);
+
+  useEffect(() => {
+    if (!rooms.length) return;
+    if (!rooms.includes(defaultRoom)) setDefaultRoom(rooms[0]);
+    if (!rooms.includes(addForm.room)) {
+      setAddForm(f => ({ ...f, room: rooms[0], box: "" }));
+    }
+    setBoxForm(f => ({ ...f, room: rooms.includes(f.room) ? f.room : rooms[0] }));
+    setBoxMove(m => ({
+      ...m,
+      fromRoom: rooms.includes(m.fromRoom) ? m.fromRoom : rooms[0],
+      toRoom: rooms.includes(m.toRoom) ? m.toRoom : rooms[0],
+    }));
+  }, [rooms, defaultRoom, addForm.room]);
 
   // ── Initialize model ──────────────────────────────────────────────────────
   useEffect(() => {
@@ -457,7 +530,11 @@ function SemanticInventory() {
         const persisted = await getAllItems();
         if (!live || cancelRef.current) return;
         if (persisted.length > 0) {
-          setInventory(persisted);
+          setInventory(persisted.map(item => ({
+            ...item,
+            room: item.room || "Unassigned",
+            box: item.box || "",
+          })));
           setSeeding(false);
           setSeedProg({ done: 0, total: 0, current: "" });
           return;
@@ -471,10 +548,14 @@ function SemanticInventory() {
           const item = SEED_ITEMS[i];
           if (live) setSeedProg({ done: i, total: SEED_ITEMS.length, current: item.name });
           try {
-            const vec = await embedText(\`\${item.name}. \${item.description}\`);
+            const seedRoom = "Unassigned";
+            const seedBox = "Starter Box";
+            const vec = await embedText(\`\${item.name}. \${item.description}. Box \${seedBox}. Room \${seedRoom}\`);
             const stored = await addItem({
               id: crypto.randomUUID(),
               ...item,
+              room: seedRoom,
+              box: seedBox,
               vector: vec,
               addedAt: new Date().toLocaleString(),
             });
@@ -499,27 +580,81 @@ function SemanticInventory() {
 
   // ── Add ───────────────────────────────────────────────────────────────────
   const handleAdd = async () => {
-    const name = String(addForm.name ?? "").trim();
-    if (!name) return toast("Item name is required.", "error");
+    const itemName = normalizeLabel(addForm.name);
+    if (!itemName) return toast("Item name is required.", "error");
     if (modelStatus !== "ready") return toast("Model not ready.", "error");
+    const selectedRoom = prettyLabel(addForm.room || defaultRoom);
+    if (!selectedRoom) return toast("Select a room.", "error");
+    if (!rooms.some(r => normalizeLabel(r).toLowerCase() === selectedRoom.toLowerCase())) {
+      return toast("Selected room does not exist.", "error");
+    }
     setLoading(l => ({ ...l, add: true })); setError(null);
     try {
       const desc = String(addForm.description ?? "").trim();
-      const vec  = await embedText([name, desc].filter(Boolean).join(". "));
+      const selectedBox = prettyLabel(addForm.box);
+      const vec  = await embedText([
+        itemName,
+        desc,
+        selectedBox ? ("Box " + selectedBox) : "",
+        "Room " + selectedRoom,
+      ].filter(Boolean).join(". "));
       const stored = await addItem({
-        id: crypto.randomUUID(), name, description: desc,
+        id: crypto.randomUUID(),
+        name: itemName,
+        room: selectedRoom,
+        box: selectedBox,
+        description: desc,
         qty: String(addForm.qty ?? "").trim(), unit: String(addForm.unit ?? "").trim(),
         status: addForm.status, vector: vec, addedAt: new Date().toLocaleString(),
       });
       setInventory(inv => [...inv, stored]);
-      setAddForm({ name: "", description: "", qty: "", unit: "", status: "In Stock" });
-      toast(\`"\${name}" stored ✓\`);
+      setAddForm({ name: "", description: "", qty: "", unit: "", room: selectedRoom, box: "", status: "In Stock" });
+      const loc = [stored.room, stored.box].filter(Boolean).join(" › ");
+      toast(\`"\${stored.name}" stored in \${loc || "Unassigned"} ✓\`);
       if (isMobile) setActiveTab("inventory");
     } catch (e) {
       setError(String(e?.message ?? e)); toast("Embedding failed.", "error");
     } finally {
       setLoading(l => ({ ...l, add: false }));
     }
+  };
+
+  const handleAddRoom = () => {
+    const roomName = prettyLabel(roomForm);
+    if (!roomName) return toast("Enter a room name.", "error");
+    if (rooms.some(r => normalizeLabel(r).toLowerCase() === roomName.toLowerCase())) {
+      return toast("Room already exists.", "error");
+    }
+    setRooms(prev => [...prev, roomName]);
+    setRoomForm("");
+    setAddForm(f => ({ ...f, room: roomName, box: "" }));
+    setBoxForm(f => ({ ...f, room: roomName }));
+    toast(\`Room "\${roomName}" added.\`);
+  };
+
+  const handleAddBox = () => {
+    const boxName = prettyLabel(boxForm.name);
+    const boxRoom = prettyLabel(boxForm.room || defaultRoom);
+    if (!boxName) return toast("Enter a box name.", "error");
+    if (!boxRoom) return toast("Select a room for the box.", "error");
+    if (!rooms.some(r => normalizeLabel(r).toLowerCase() === boxRoom.toLowerCase())) {
+      return toast("Room does not exist.", "error");
+    }
+    const duplicate = boxes.some(b =>
+      normalizeLabel(b.name).toLowerCase() === boxName.toLowerCase()
+      && normalizeLabel(b.room).toLowerCase() === boxRoom.toLowerCase()
+    );
+    const duplicateFromItems = inventory.some(item =>
+      normalizeLabel(item.box).toLowerCase() === boxName.toLowerCase()
+      && normalizeLabel(item.room).toLowerCase() === boxRoom.toLowerCase()
+    );
+    if (duplicate || duplicateFromItems) return toast("Box already exists in this room.", "error");
+    setBoxes(prev => [...prev, { id: crypto.randomUUID(), name: boxName, room: boxRoom }]);
+    setBoxForm(prev => ({ ...prev, name: "" }));
+    if (prettyLabel(addForm.room || defaultRoom) === boxRoom) {
+      setAddForm(f => ({ ...f, box: boxName }));
+    }
+    toast(\`Box "\${boxName}" added to \${boxRoom}.\`);
   };
 
   // ── Search ────────────────────────────────────────────────────────────────
@@ -531,6 +666,7 @@ function SemanticInventory() {
     setLoading(l => ({ ...l, search: true })); setResults(null); setError(null);
     try {
       const qVec = await embedQuery(q);
+      qVec.__queryText = q;
       const k = Math.max(1, Math.min(topK, inventory.length));
       setResults(searchItems(qVec, inventory, k));
     } catch (e) {
@@ -565,9 +701,81 @@ function SemanticInventory() {
     }
   };
 
+  const handleMoveBox = async () => {
+    const sourceRoom = prettyLabel(boxMove.fromRoom || defaultRoom || "Garage");
+    const box = prettyLabel(boxMove.box);
+    const targetRoom = prettyLabel(boxMove.toRoom || defaultRoom || "Garage");
+    if (!sourceRoom) return toast("Select source room.", "error");
+    if (!box) return toast("Select a box to move.", "error");
+    if (!targetRoom) return toast("Select destination room.", "error");
+    if (sourceRoom.toLowerCase() === targetRoom.toLowerCase()) return toast("Choose a different destination room.", "error");
+
+    const changed = inventory.filter(item =>
+      normalizeLabel(item.box).toLowerCase() === box.toLowerCase()
+      && prettyLabel(item.room).toLowerCase() === sourceRoom.toLowerCase()
+    );
+    if (!changed.length) return toast("No items found in selected box.", "error");
+    try {
+      const updatedRecords = changed.map(item => ({ ...item, room: targetRoom }));
+      await Promise.all(updatedRecords.map(item => addItem(item)));
+      setInventory(prev => prev.map(item =>
+        normalizeLabel(item.box).toLowerCase() === box.toLowerCase()
+        && prettyLabel(item.room).toLowerCase() === sourceRoom.toLowerCase()
+          ? { ...item, room: targetRoom }
+          : item
+      ));
+      setResults(prev => prev ? prev.map(item =>
+        normalizeLabel(item.box).toLowerCase() === box.toLowerCase()
+        && prettyLabel(item.room).toLowerCase() === sourceRoom.toLowerCase()
+          ? { ...item, room: targetRoom }
+          : item
+      ) : prev);
+      setBoxes(prev => prev.map(b =>
+        normalizeLabel(b.name).toLowerCase() === box.toLowerCase()
+        && normalizeLabel(b.room).toLowerCase() === sourceRoom.toLowerCase()
+          ? { ...b, room: targetRoom }
+          : b
+      ));
+      setBoxMove(prev => ({ ...prev, fromRoom: sourceRoom, box: "", toRoom: targetRoom }));
+      toast(\`Moved box "\${box}" from \${sourceRoom} to \${targetRoom}.\`);
+    } catch (e) {
+      setError(\`Move failed: \${String(e?.message ?? e)}\`);
+      toast("Move failed.", "error");
+    }
+  };
+
   const busy = loading.add || loading.search;
   const seedPct = seedProg.total > 0 ? (seedProg.done / seedProg.total) * 100 : 0;
   const displayItems = (activeTab === "search" && results !== null) ? results : inventory;
+  const knownRooms = Array.from(new Set([
+    ...DEFAULT_ROOMS.map(prettyLabel),
+    ...rooms.map(prettyLabel),
+    ...inventory.map(i => prettyLabel(i.room)).filter(Boolean),
+    prettyLabel(defaultRoom),
+  ])).filter(Boolean);
+
+  const knownBoxRecords = Array.from(new Map([
+    ...boxes.map(b => ({ name: prettyLabel(b.name), room: prettyLabel(b.room) })),
+    ...inventory
+      .filter(i => normalizeLabel(i.box))
+      .map(i => ({ name: prettyLabel(i.box), room: prettyLabel(i.room || defaultRoom) })),
+  ].map(b => {
+    const key = normalizeLabel(b.room).toLowerCase() + "::" + normalizeLabel(b.name).toLowerCase();
+    return [key, b];
+  })).values());
+
+  const addItemBoxes = knownBoxRecords
+    .filter(b => normalizeLabel(b.room).toLowerCase() === normalizeLabel(addForm.room || defaultRoom).toLowerCase())
+    .map(b => b.name);
+
+  const moveBoxes = knownBoxRecords
+    .filter(b => normalizeLabel(b.room).toLowerCase() === normalizeLabel(boxMove.fromRoom || defaultRoom).toLowerCase())
+    .map(b => b.name);
+  const moveReady = Boolean(normalizeLabel(boxMove.box)) && normalizeLabel(boxMove.fromRoom) && normalizeLabel(boxMove.toRoom)
+    && normalizeLabel(boxMove.fromRoom).toLowerCase() !== normalizeLabel(boxMove.toRoom).toLowerCase();
+  const moveSummary = moveReady
+    ? ('Move "' + prettyLabel(boxMove.box) + '" from ' + prettyLabel(boxMove.fromRoom) + ' to ' + prettyLabel(boxMove.toRoom))
+    : "Pick source room, box, and destination room";
 
   // ── Shared sub-components ─────────────────────────────────────────────────
   const matchLabel = s => s > 0.75 ? "✦ strong" : s > 0.50 ? "· good" : "· partial";
@@ -598,6 +806,15 @@ function SemanticInventory() {
                 border:"1px solid rgba(148, 163, 184, 0.15)"
               }}>
                 {[item.qty, item.unit].filter(Boolean).join(" ")}
+              </span>
+            )}
+            {(item.room || item.box) && (
+              <span style={{
+                fontSize:11, padding:"4px 10px", borderRadius:20,
+                background:"rgba(14, 165, 233, 0.12)", color:"#67e8f9",
+                border:"1px solid rgba(34, 211, 238, 0.25)"
+              }}>
+                {[item.room, item.box].filter(Boolean).join(" › ")}
               </span>
             )}
           </div>
@@ -804,6 +1021,119 @@ function SemanticInventory() {
                 value={topK}
                 onChange={e => setTopK(Math.max(1, parseInt(e.target.value, 10) || 1))}
               />
+              <div style={{ fontSize:12, color:"#94a3b8", lineHeight:1.7 }}>
+                Default Room:
+              </div>
+              <select
+                className="glass-input"
+                style={m.inp}
+                value={defaultRoom}
+                onChange={e => {
+                  const next = prettyLabel(e.target.value);
+                  setDefaultRoom(next);
+                  setAddForm(f => ({ ...f, room: next, box: "" }));
+                  setBoxForm(f => ({ ...f, room: next }));
+                  setBoxMove(prev => ({ ...prev, fromRoom: next, toRoom: next, box: "" }));
+                }}
+              >
+                {knownRooms.map(room => <option key={room} value={room}>{room}</option>)}
+              </select>
+              <div style={{ fontSize:12, color:"#94a3b8", lineHeight:1.7 }}>
+                Add Room:
+              </div>
+              <div style={{ display:"flex", gap:8 }}>
+                <input
+                  className="glass-input"
+                  style={{ ...m.inp, flex:1 }}
+                  placeholder="Room name"
+                  value={roomForm}
+                  onChange={e => setRoomForm(e.target.value)}
+                />
+                <button
+                  className="glass-btn-secondary"
+                  style={{ ...m.btn("default"), width:110, color:"#67e8f9", border:"1px solid rgba(34, 211, 238, 0.35)" }}
+                  onClick={handleAddRoom}
+                >
+                  Add Room
+                </button>
+              </div>
+              <div style={{ fontSize:12, color:"#94a3b8", lineHeight:1.7 }}>
+                Add Box (assign to room):
+              </div>
+              <select
+                className="glass-input"
+                style={m.inp}
+                value={boxForm.room}
+                onChange={e => setBoxForm(f => ({ ...f, room: prettyLabel(e.target.value) }))}
+              >
+                {knownRooms.map(room => <option key={room} value={room}>{room}</option>)}
+              </select>
+              <div style={{ display:"flex", gap:8 }}>
+                <input
+                  className="glass-input"
+                  style={{ ...m.inp, flex:1 }}
+                  placeholder="Box name"
+                  value={boxForm.name}
+                  onChange={e => setBoxForm(f => ({ ...f, name: e.target.value }))}
+                />
+                <button
+                  className="glass-btn-secondary"
+                  style={{ ...m.btn("default"), width:110, color:"#67e8f9", border:"1px solid rgba(34, 211, 238, 0.35)" }}
+                  onClick={handleAddBox}
+                >
+                  Add Box
+                </button>
+              </div>
+              <div style={{ fontSize:12, color:"#94a3b8", lineHeight:1.7 }}>
+                Move Box Between Rooms:
+              </div>
+              <div style={{ fontSize:11, color:"#64748b", lineHeight:1.6 }}>
+                Move updates every item currently inside that box.
+              </div>
+              <div style={{ fontSize:12, color:"#94a3b8", lineHeight:1.7 }}>1. From room</div>
+              <select
+                className="glass-input"
+                style={m.inp}
+                value={boxMove.fromRoom}
+                onChange={e => setBoxMove(prev => ({ ...prev, fromRoom: prettyLabel(e.target.value), box: "" }))}
+              >
+                {knownRooms.map(room => <option key={room} value={room}>{room}</option>)}
+              </select>
+              <div style={{ fontSize:12, color:"#94a3b8", lineHeight:1.7 }}>2. Box</div>
+              <select
+                className="glass-input"
+                style={m.inp}
+                value={boxMove.box}
+                onChange={e => setBoxMove(prev => ({ ...prev, box: e.target.value }))}
+              >
+                <option value="">Select box in room</option>
+                {moveBoxes.map(box => <option key={box} value={box}>{box}</option>)}
+              </select>
+              <div style={{ fontSize:12, color:"#94a3b8", lineHeight:1.7 }}>3. To room</div>
+              <select
+                className="glass-input"
+                style={m.inp}
+                value={boxMove.toRoom}
+                onChange={e => setBoxMove(prev => ({ ...prev, toRoom: prettyLabel(e.target.value) }))}
+              >
+                {knownRooms.map(room => <option key={room} value={room}>{room}</option>)}
+              </select>
+              <div style={{ fontSize:11, color: moveReady ? "#67e8f9" : "#64748b", lineHeight:1.6 }}>
+                {moveSummary}
+              </div>
+              <button
+                className="glass-btn-secondary"
+                style={{
+                  ...m.btn("default"),
+                  color: moveReady ? "#67e8f9" : "#64748b",
+                  border:"1px solid rgba(34, 211, 238, 0.35)",
+                  opacity: moveReady ? 1 : 0.55
+                }}
+                onClick={handleMoveBox}
+                disabled={!moveReady}
+              >
+                Move Box Now
+              </button>
               <div style={{ fontSize:11, color:"#64748b", lineHeight:1.6 }}>
                 Stored items: {inventory.length}
               </div>
@@ -839,6 +1169,27 @@ function SemanticInventory() {
               <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:8 }}>
                 <input className="glass-input" style={m.inp} placeholder="Qty"  value={addForm.qty}  onChange={e => setAddForm(f => ({ ...f, qty: e.target.value }))}  disabled={modelStatus !== "ready"} />
                 <input className="glass-input" style={m.inp} placeholder="Unit" value={addForm.unit} onChange={e => setAddForm(f => ({ ...f, unit: e.target.value }))} disabled={modelStatus !== "ready"} />
+              </div>
+              <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:8 }}>
+                <select
+                  className="glass-input"
+                  style={m.inp}
+                  value={addForm.room}
+                  onChange={e => setAddForm(f => ({ ...f, room: prettyLabel(e.target.value), box: "" }))}
+                  disabled={modelStatus !== "ready"}
+                >
+                  {knownRooms.map(room => <option key={room} value={room}>{room}</option>)}
+                </select>
+                <select
+                  className="glass-input"
+                  style={m.inp}
+                  value={addForm.box}
+                  onChange={e => setAddForm(f => ({ ...f, box: e.target.value }))}
+                  disabled={modelStatus !== "ready"}
+                >
+                  <option value="">No box</option>
+                  {addItemBoxes.map(box => <option key={box} value={box}>{box}</option>)}
+                </select>
               </div>
               <div style={{ display:"flex", flexWrap:"wrap", gap:6 }}>
                 {STATUSES.map(st => {
@@ -924,6 +1275,15 @@ function SemanticInventory() {
               <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:6 }}>
                 <input className="glass-input" style={d.inp} placeholder="Qty"  value={addForm.qty}  onChange={e => setAddForm(f => ({ ...f, qty: e.target.value }))}  disabled={modelStatus !== "ready"} />
                 <input className="glass-input" style={d.inp} placeholder="Unit" value={addForm.unit} onChange={e => setAddForm(f => ({ ...f, unit: e.target.value }))} disabled={modelStatus !== "ready"} />
+              </div>
+              <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:6 }}>
+                <select className="glass-input" style={d.sel} value={addForm.room} onChange={e => setAddForm(f => ({ ...f, room: prettyLabel(e.target.value), box: "" }))} disabled={modelStatus !== "ready"}>
+                  {knownRooms.map(room => <option key={room} value={room}>{room}</option>)}
+                </select>
+                <select className="glass-input" style={d.sel} value={addForm.box} onChange={e => setAddForm(f => ({ ...f, box: e.target.value }))} disabled={modelStatus !== "ready"}>
+                  <option value="">No box</option>
+                  {addItemBoxes.map(box => <option key={box} value={box}>{box}</option>)}
+                </select>
               </div>
               <select className="glass-input" style={d.sel} value={addForm.status} onChange={e => setAddForm(f => ({ ...f, status: e.target.value }))} disabled={modelStatus !== "ready"}>
                 {STATUSES.map(st => <option key={st}>{st}</option>)}
@@ -1011,40 +1371,41 @@ function SemanticInventory() {
 // ─── Mobile styles ────────────────────────────────────────────────────────────
 const FF = "'DM Mono','Courier New',monospace";
 const INPUT_FF = "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif";
+const TYPE = { xs: 12, sm: 13, md: 14, lg: 16, xl: 20 };
 const m = {
   root:    { display:"flex", flexDirection:"column", height:"100%",
              color:"#e2e8f0", fontFamily:FF, overflow:"hidden" },
   header:  { display:"flex", alignItems:"center", gap:10, padding:"14px 16px", flexShrink:0 },
   logo:    { width:34, height:34, background:"linear-gradient(135deg,#22d3ee,#8b5cf6)",
              borderRadius:8, display:"flex", alignItems:"center", justifyContent:"center", fontSize:16 },
-  title:   { fontSize:16, fontWeight:700, color:"#f1f5f9", letterSpacing:"-0.3px" },
-  subtitle:{ fontSize:9, color:"#64748b", letterSpacing:"1px" },
-  badge:   { borderRadius:20, padding:"4px 10px", fontSize:11, color:"#22d3ee" },
+  title:   { fontSize:TYPE.lg, fontWeight:700, color:"#f1f5f9", letterSpacing:"-0.2px" },
+  subtitle:{ fontSize:TYPE.xs, color:"#94a3b8", letterSpacing:"0.8px" },
+  badge:   { borderRadius:20, padding:"4px 10px", fontSize:TYPE.xs, color:"#22d3ee" },
   modelDot:(s) => ({ width:8, height:8, borderRadius:"50%", flexShrink:0,
              background: s==="ready" ? "#34d399" : s==="loading" ? "#22d3ee" : s==="error" ? "#f87171" : "#64748b",
              boxShadow: s==="ready" ? "0 0 8px rgba(52, 211, 153, 0.6)" : s==="loading" ? "0 0 8px rgba(34, 211, 238, 0.6)" : "none" }),
   banner:  { display:"flex", gap:10, alignItems:"center", borderBottom:"1px solid rgba(148, 163, 184, 0.1)",
              padding:"12px 16px", flexShrink:0, borderRadius: "0 0 12px 12px" },
   error:   { background:"rgba(127, 29, 29, 0.6)", borderBottom:"1px solid rgba(248, 113, 113, 0.2)",
-             padding:"10px 16px", fontSize:12, color:"#f87171", display:"flex", justifyContent:"space-between", flexShrink:0 },
+             padding:"10px 16px", fontSize:TYPE.sm, color:"#f87171", display:"flex", justifyContent:"space-between", flexShrink:0 },
   content: { flex:1, minHeight:0, overflowY:"auto", padding:"12px 14px", display:"flex", flexDirection:"column", gap:10,
              paddingBottom:20 },
   card:    { borderRadius:12, padding:"14px", display:"flex", gap:10, alignItems:"flex-start" },
-  cName:   { fontSize:15, fontWeight:700, color:"#f1f5f9", marginBottom:3 },
-  cDesc:   { fontSize:12, color:"#94a3b8", lineHeight:1.5 },
+  cName:   { fontSize:TYPE.lg, fontWeight:700, color:"#f1f5f9", marginBottom:3 },
+  cDesc:   { fontSize:TYPE.sm, color:"#94a3b8", lineHeight:1.55 },
   empty:   { display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center",
              flex:1, padding:40, textAlign:"center" },
   searchBox:{ borderBottom:"1px solid rgba(148, 163, 184, 0.1)", padding:"12px 14px",
               display:"flex", flexDirection:"column", gap:8, flexShrink:0, borderRadius: "0 0 12px 12px" },
-  searchInput:{ width:"100%", borderRadius:8, padding:"10px 12px", color:"#e2e8f0", fontSize:16, lineHeight:"1.35", fontFamily:INPUT_FF,
+  searchInput:{ width:"100%", borderRadius:8, padding:"10px 12px", color:"#e2e8f0", fontSize:TYPE.lg, lineHeight:"1.35", fontFamily:INPUT_FF,
                 resize:"none", boxSizing:"border-box" },
-  inp:     { width:"100%", borderRadius:8, padding:"12px 12px", color:"#e2e8f0", fontSize:16, lineHeight:"1.35", fontFamily:INPUT_FF,
+  inp:     { width:"100%", borderRadius:8, padding:"11px 12px", color:"#e2e8f0", fontSize:TYPE.md, lineHeight:"1.35", fontFamily:INPUT_FF,
              boxSizing:"border-box", display:"block" },
   addForm: { display:"flex", flexDirection:"column", gap:10 },
-  secLabel:{ fontSize:10, letterSpacing:"2px", color:"#64748b", textTransform:"uppercase" },
+  secLabel:{ fontSize:TYPE.xs, letterSpacing:"1.2px", color:"#94a3b8", textTransform:"uppercase", fontWeight:600 },
   btn:     (v, d) => ({
              width:"100%", padding:"13px", borderRadius:8, border:"none", cursor: d ? "not-allowed" : "pointer",
-             fontSize:14, fontFamily:FF, fontWeight:600, opacity: d ? 0.45 : 1,
+             fontSize:TYPE.md, fontFamily:FF, fontWeight:600, opacity: d ? 0.45 : 1,
              color:"#fff" }),
   nav:     { display:"flex", flexShrink:0, paddingBottom: "env(safe-area-inset-bottom, 0px)" },
   navBtn:  (a) => ({
@@ -1061,10 +1422,10 @@ const d = {
   header: { borderBottom:"1px solid rgba(148, 163, 184, 0.1)", padding:"18px 26px", display:"flex", alignItems:"center", gap:13 },
   logo:   { width:36, height:36, background:"linear-gradient(135deg,#22d3ee,#8b5cf6)", borderRadius:8,
             display:"flex", alignItems:"center", justifyContent:"center", fontSize:17, flexShrink:0 },
-  h1:     { fontSize:19, fontWeight:700, letterSpacing:"-0.4px", color:"#f1f5f9", margin:0 },
-  sub:    { fontSize:10, color:"#64748b", margin:"2px 0 0", letterSpacing:"0.5px" },
-  badge:  { marginLeft:"auto", borderRadius:20, padding:"4px 13px", fontSize:11, color:"#22d3ee" },
-  status: (s) => ({ fontSize:10, padding:"4px 10px", borderRadius:6,
+  h1:     { fontSize:20, fontWeight:700, letterSpacing:"-0.3px", color:"#f1f5f9", margin:0 },
+  sub:    { fontSize:TYPE.xs, color:"#94a3b8", margin:"2px 0 0", letterSpacing:"0.4px" },
+  badge:  { marginLeft:"auto", borderRadius:20, padding:"4px 13px", fontSize:TYPE.xs, color:"#22d3ee" },
+  status: (s) => ({ fontSize:TYPE.xs, padding:"5px 10px", borderRadius:6,
             background: s==="ready" ? "rgba(6, 78, 59, 0.5)" : s==="loading" ? "rgba(30, 58, 138, 0.5)" : "rgba(127, 29, 29, 0.5)",
             border: \`1px solid \${s==="ready" ? "rgba(16, 185, 129, 0.3)" : s==="loading" ? "rgba(59, 130, 246, 0.3)" : "rgba(248, 113, 113, 0.3)"}\`,
             color: s==="ready" ? "#34d399" : s==="loading" ? "#60a5fa" : "#f87171",
@@ -1072,17 +1433,17 @@ const d = {
   body:   { display:"grid", gridTemplateColumns:"310px 1fr", minHeight:"calc(100vh - 73px)" },
   side:   { borderRight:"1px solid rgba(148, 163, 184, 0.1)", padding:"18px 16px",
             display:"flex", flexDirection:"column", gap:16, overflowY:"auto", borderRadius: "0 12px 12px 0" },
-  secLbl: { fontSize:10, letterSpacing:"2px", color:"#64748b", textTransform:"uppercase", marginBottom:7 },
+  secLbl: { fontSize:TYPE.xs, letterSpacing:"1.2px", color:"#94a3b8", textTransform:"uppercase", marginBottom:7, fontWeight:600 },
   form:   { display:"flex", flexDirection:"column", gap:6 },
-  inp:    { width:"100%", borderRadius:6, padding:"7px 10px", color:"#e2e8f0", fontSize:12, outline:"none",
-            boxSizing:"border-box", fontFamily:FF, transition:"border-color 0.15s" },
-  ta:     { width:"100%", borderRadius:6, padding:"7px 10px", color:"#e2e8f0", fontSize:12, outline:"none",
-            boxSizing:"border-box", fontFamily:FF, resize:"vertical", minHeight:60 },
-  sel:    { width:"100%", borderRadius:6, padding:"7px 10px", color:"#e2e8f0", fontSize:12, outline:"none",
-            boxSizing:"border-box", fontFamily:FF, cursor:"pointer" },
+  inp:    { width:"100%", borderRadius:6, padding:"9px 10px", color:"#e2e8f0", fontSize:TYPE.md, outline:"none",
+            boxSizing:"border-box", fontFamily:INPUT_FF, transition:"border-color 0.15s" },
+  ta:     { width:"100%", borderRadius:6, padding:"9px 10px", color:"#e2e8f0", fontSize:TYPE.md, outline:"none",
+            boxSizing:"border-box", fontFamily:INPUT_FF, resize:"vertical", minHeight:72, lineHeight:1.4 },
+  sel:    { width:"100%", borderRadius:6, padding:"9px 10px", color:"#e2e8f0", fontSize:TYPE.md, outline:"none",
+            boxSizing:"border-box", fontFamily:INPUT_FF, cursor:"pointer" },
   btn:    (v, d) => ({
             width:"100%", padding:"8px 13px", borderRadius:6, border:"none",
-            cursor: d ? "not-allowed" : "pointer", fontSize:12, fontFamily:FF,
+            cursor: d ? "not-allowed" : "pointer", fontSize:TYPE.md, fontFamily:FF,
             fontWeight:600, letterSpacing:"0.3px", opacity: d ? 0.45 : 1, transition:"all 0.15s",
             background: v==="primary" ? "linear-gradient(135deg,#22d3ee,#8b5cf6)"
                       : v==="search"  ? "linear-gradient(135deg,#8b5cf6,#ec4899)" : "#1e2d3d",
@@ -1090,14 +1451,14 @@ const d = {
   main:   { padding:"18px 22px", display:"flex", flexDirection:"column", gap:12, overflowY:"auto" },
   banner: { borderRadius:8, padding:"12px 16px", display:"flex", gap:10, alignItems:"center", marginBottom:4 },
   tabs:   { display:"flex", gap:3, borderBottom:"1px solid rgba(148, 163, 184, 0.1)", marginBottom:2 },
-  tab:    (a) => ({ padding:"6px 15px", borderRadius:"6px 6px 0 0", border:"1px solid",
+  tab:    (a) => ({ padding:"8px 15px", borderRadius:"6px 6px 0 0", border:"1px solid",
             borderColor: a ? "rgba(139, 92, 246, 0.3)" : "transparent",
             background: a ? "rgba(30, 41, 59, 0.5)" : "transparent", color: a ? "#22d3ee" : "#64748b",
-            fontSize:11, cursor:"pointer", fontFamily:FF, fontWeight: a ? 600 : 400, marginBottom:-1 }),
+            fontSize:TYPE.sm, cursor:"pointer", fontFamily:FF, fontWeight: a ? 600 : 400, marginBottom:-1 }),
   card:   { borderRadius:10, padding:"12px 14px", display:"flex", gap:11, alignItems:"flex-start" },
-  cName:  { fontSize:13, fontWeight:700, color:"#f1f5f9", marginBottom:3 },
-  cDesc:  { fontSize:11, color:"#94a3b8", marginBottom:6, lineHeight:1.5 },
-  err:    { borderRadius:6, padding:"9px 12px", fontSize:11, color:"#f87171", lineHeight:1.5,
+  cName:  { fontSize:TYPE.md, fontWeight:700, color:"#f1f5f9", marginBottom:3 },
+  cDesc:  { fontSize:TYPE.sm, color:"#94a3b8", marginBottom:6, lineHeight:1.55 },
+  err:    { borderRadius:6, padding:"9px 12px", fontSize:TYPE.sm, color:"#f87171", lineHeight:1.5,
             background:"rgba(127, 29, 29, 0.5)", border:"1px solid rgba(248, 113, 113, 0.2)" },
 };
 
