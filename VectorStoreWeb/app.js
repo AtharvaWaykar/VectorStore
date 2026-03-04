@@ -78,6 +78,75 @@ async function embedText(text) {
   }
 }
 
+// ─── IndexedDB storage ────────────────────────────────────────────────────────
+const DB_NAME = "vectorstock-db";
+const DB_VERSION = 1;
+const ITEMS_STORE = "items";
+let dbPromise = null;
+
+function openDB() {
+  if (dbPromise) return dbPromise;
+  dbPromise = new Promise((resolve, reject) => {
+    const request = window.indexedDB.open(DB_NAME, DB_VERSION);
+    request.onupgradeneeded = () => {
+      const db = request.result;
+      if (!db.objectStoreNames.contains(ITEMS_STORE)) {
+        db.createObjectStore(ITEMS_STORE, { keyPath: "id" });
+      }
+    };
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error || new Error("Failed to open IndexedDB"));
+  });
+  return dbPromise;
+}
+
+async function withStore(mode, run) {
+  const db = await openDB();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(ITEMS_STORE, mode);
+    const store = tx.objectStore(ITEMS_STORE);
+    let result;
+    try {
+      result = run(store);
+    } catch (e) {
+      reject(e);
+      return;
+    }
+    tx.oncomplete = () => resolve(result);
+    tx.onerror = () => reject(tx.error || new Error("IndexedDB transaction failed"));
+    tx.onabort = () => reject(tx.error || new Error("IndexedDB transaction aborted"));
+  });
+}
+
+async function addItem(item) {
+  const record = { ...item, id: item.id || crypto.randomUUID() };
+  return withStore("readwrite", store => {
+    store.put(record);
+    return record;
+  });
+}
+
+async function getAllItems() {
+  const db = await openDB();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(ITEMS_STORE, "readonly");
+    const store = tx.objectStore(ITEMS_STORE);
+    const request = store.getAll();
+    request.onsuccess = () => resolve(request.result || []);
+    request.onerror = () => reject(request.error || new Error("Failed to read items"));
+  });
+}
+
+async function deleteItem(id) {
+  return withStore("readwrite", store => store.delete(id));
+}
+
+async function clearAll() {
+  return withStore("readwrite", store => store.clear());
+}
+
+window.vectorStoreDB = { addItem, getAllItems, deleteItem, clearAll };
+
 // ─── Seed data (30 household items) ──────────────────────────────────────────
 const SEED_ITEMS = [
   { name: "Chef's Knife",          description: "Sharp 8-inch stainless steel blade for chopping vegetables and meat",           qty: "1",  unit: "pcs",   status: "In Stock"  },
@@ -177,27 +246,50 @@ function SemanticInventory() {
     let live = true;
 
     async function run() {
-      console.log('Starting seed process...');
-      setSeeding(true);
-      setSeedProg({ done: 0, total: SEED_ITEMS.length, current: "" });
-      const acc = [];
-
-      for (let i = 0; i < SEED_ITEMS.length; i++) {
-        if (!live || cancelRef.current) break;
-        const item = SEED_ITEMS[i];
-        if (live) setSeedProg({ done: i, total: SEED_ITEMS.length, current: item.name });
-        try {
-          const vec = await embedText(`${item.name}. ${item.description}`);
-          acc.push({ id: crypto.randomUUID(), ...item, vector: vec, addedAt: new Date().toLocaleString() });
-          if (live) { setInventory([...acc]); setSeedProg({ done: i + 1, total: SEED_ITEMS.length, current: item.name }); }
-        } catch (e) {
-          console.warn(`Seed skip "${item.name}":`, e.message);
-          if (live) setSeedProg({ done: i + 1, total: SEED_ITEMS.length, current: item.name });
+      try {
+        const persisted = await getAllItems();
+        if (!live || cancelRef.current) return;
+        if (persisted.length > 0) {
+          setInventory(persisted);
+          setSeeding(false);
+          setSeedProg({ done: 0, total: 0, current: "" });
+          return;
         }
-      }
-      if (live) {
-        console.log('Seed complete!');
-        setSeeding(false);
+
+        console.log('Starting seed process...');
+        setSeeding(true);
+        setSeedProg({ done: 0, total: SEED_ITEMS.length, current: "" });
+        const acc = [];
+
+        for (let i = 0; i < SEED_ITEMS.length; i++) {
+          if (!live || cancelRef.current) break;
+          const item = SEED_ITEMS[i];
+          if (live) setSeedProg({ done: i, total: SEED_ITEMS.length, current: item.name });
+          try {
+            const vec = await embedText(`${item.name}. ${item.description}`);
+            const stored = await addItem({
+              id: crypto.randomUUID(),
+              ...item,
+              vector: vec,
+              addedAt: new Date().toLocaleString(),
+            });
+            acc.push(stored);
+            if (live) {
+              setInventory([...acc]);
+              setSeedProg({ done: i + 1, total: SEED_ITEMS.length, current: item.name });
+            }
+          } catch (e) {
+            console.warn(`Seed skip "${item.name}":`, e.message);
+            if (live) setSeedProg({ done: i + 1, total: SEED_ITEMS.length, current: item.name });
+          }
+        }
+      } catch (e) {
+        if (live) setError(`Storage failed: ${String(e?.message ?? e)}`);
+      } finally {
+        if (live) {
+          console.log('Seed/load complete');
+          setSeeding(false);
+        }
       }
     }
 
@@ -216,7 +308,7 @@ function SemanticInventory() {
     try {
       const desc = String(addForm.description ?? "").trim();
       const vec  = await embedText([name, desc].filter(Boolean).join(". "));
-      const item = {
+      const item = await addItem({
         id: crypto.randomUUID(),
         name,
         description: desc,
@@ -225,7 +317,7 @@ function SemanticInventory() {
         status: addForm.status,
         vector: vec,
         addedAt: new Date().toLocaleString(),
-      };
+      });
       setInventory(inv => [...inv, item]);
       setAddForm({ name: "", description: "", qty: "", unit: "", status: "In Stock" });
       toast(`"${item.name}" embedded and stored ✓`);
@@ -264,9 +356,15 @@ function SemanticInventory() {
     }
   };
 
-  const handleDelete = (id) => {
-    setInventory(inv => inv.filter(i => i.id !== id));
-    setResults(r => r ? r.filter(i => i.id !== id) : r);
+  const handleDelete = async (id) => {
+    try {
+      await deleteItem(id);
+      setInventory(inv => inv.filter(i => i.id !== id));
+      setResults(r => r ? r.filter(i => i.id !== id) : r);
+    } catch (e) {
+      setError(`Delete failed: ${String(e?.message ?? e)}`);
+      toast("Delete failed.", "error");
+    }
   };
 
   const busy = loading.add || loading.search;
