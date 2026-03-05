@@ -137,40 +137,6 @@ Then open: `http://localhost:8000/index.html`
 
 ---
 
-## Building for Production
-
-### Mobile — EAS Build (Expo Application Services)
-
-```bash
-# Install EAS CLI
-npm install -g eas-cli
-
-cd VectorStoreMobile
-
-# Build iOS (.ipa)
-eas build --platform ios
-
-# Build Android (.apk / .aab)
-eas build --platform android
-```
-
-### Mobile — Local iOS Build (Xcode)
-
-```bash
-cd VectorStoreMobile/ios
-xcodebuild \
-  -workspace VectorStoreMobile.xcworkspace \
-  -scheme VectorStoreMobile \
-  -configuration Release \
-  -destination "generic/platform=iOS"
-```
-
-### Web
-
-No build step. Deploy the contents of `VectorStoreWeb/` to any static hosting service (Vercel, Netlify, GitHub Pages, S3, etc.).
-
----
-
 ## Testing
 
 There is currently **no automated test suite**. Manual testing steps:
@@ -271,4 +237,3 @@ https://github.com/AtharvaWaykar/VectorStore.git
 ```
 
 Main branch: `main`
-Active development branch: `master`
