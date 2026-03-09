@@ -318,6 +318,118 @@ async function embedQuery(text) {
   return embedText(\`\${BGE_QUERY_PREFIX}\${String(text ?? "").trim()}\`);
 }
 
+// ─── Intent parsing (LLM stub + validation) ──────────────────────────────────
+const VALID_INTENTS = new Set(["add", "search", "delete", "unknown"]);
+
+function fallbackUnknownIntent(rawText) {
+  return { intent: "unknown", raw: String(rawText ?? "") };
+}
+
+function coerceQty(value, fallback = 1) {
+  const num = Number(value);
+  if (!isFinite(num)) return fallback;
+  return Math.max(1, Math.round(num));
+}
+
+function parseDeleteQty(value) {
+  if (value === null || value === undefined || String(value).trim() === "") return "all";
+  const normalized = String(value).trim().toLowerCase();
+  if (["all", "everything", "entire", "full"].includes(normalized)) return "all";
+  const num = Number(normalized);
+  if (!isFinite(num) || num <= 0) return "all";
+  return Math.max(1, Math.round(num));
+}
+
+function buildIntentSystemPrompt(activeRoom, activeBox) {
+  const safeRoom = prettyLabel(activeRoom || "Garage");
+  const safeBox = "";
+  return \`You are a home inventory assistant. The user will give you a natural language input.
+Return ONLY a JSON object - no explanation, no markdown, no extra text.
+
+The current default room is: \${safeRoom}
+The current default box is: \${safeBox || "(no box)"}
+
+Use this schema:
+- Add: { "intent": "add", "items": [{ "name": string, "qty": number, "room": string, "box": string }] }
+- Search: { "intent": "search", "query": string }
+- Delete: { "intent": "delete", "name": string, "room": string, "box": string, "qty": number | "all" }
+- Unknown: { "intent": "unknown", "raw": string }
+
+Rules:
+- Default room and box if not stated by the user
+- Multi-item inputs produce multiple objects in the items array
+- qty defaults to 1 if not mentioned
+- For delete, qty defaults to "all" if not mentioned
+- Always return valid JSON\`;
+}
+
+function validateIntentResult(result, rawText, activeRoom, activeBox) {
+  if (!result || typeof result !== "object" || Array.isArray(result)) {
+    return fallbackUnknownIntent(rawText);
+  }
+
+  const intent = String(result.intent ?? "").toLowerCase().trim();
+  if (!VALID_INTENTS.has(intent)) return fallbackUnknownIntent(rawText);
+
+  const fallbackRoom = prettyLabel(activeRoom || "Garage");
+  const fallbackBox = "";
+
+  if (intent === "add") {
+    if (!Array.isArray(result.items) || result.items.length === 0) {
+      return fallbackUnknownIntent(rawText);
+    }
+    const items = result.items
+      .map(item => {
+        if (!item || typeof item !== "object" || Array.isArray(item)) return null;
+        const name = normalizeLabel(item.name);
+        if (!name) return null;
+        return {
+          name,
+          qty: coerceQty(item.qty, 1),
+          room: prettyLabel(item.room || fallbackRoom),
+          box: prettyLabel(item.box || fallbackBox),
+        };
+      })
+      .filter(Boolean);
+    if (!items.length) return fallbackUnknownIntent(rawText);
+    return { intent: "add", items };
+  }
+
+  if (intent === "search") {
+    const query = normalizeLabel(result.query);
+    if (!query) return fallbackUnknownIntent(rawText);
+    return { intent: "search", query };
+  }
+
+  if (intent === "delete") {
+    const name = normalizeLabel(result.name);
+    if (!name) return fallbackUnknownIntent(rawText);
+    return {
+      intent: "delete",
+      name,
+      room: prettyLabel(result.room || fallbackRoom),
+      box: prettyLabel(result.box || fallbackBox),
+      qty: parseDeleteQty(result.qty),
+    };
+  }
+
+  return {
+    intent: "unknown",
+    raw: normalizeLabel(result.raw || rawText),
+  };
+}
+
+async function sendToLLM(rawText, activeRoom, activeBox) {
+  // Keep prompt generation now so OpenClaw integration is a swap-in later.
+  buildIntentSystemPrompt(activeRoom, activeBox);
+
+  // Dev stub: replace this with real LLM call when backend wiring is ready.
+  return {
+    intent: "add",
+    items: [{ name: "test item", qty: 1, room: activeRoom, box: activeBox }],
+  };
+}
+
 // ─── IndexedDB storage ────────────────────────────────────────────────────────
 const DB_NAME = "vectorstock-db";
 const DB_VERSION = 1;
@@ -452,6 +564,10 @@ function SemanticInventory() {
       .filter(b => b.name && b.room);
   });
   const [addForm,      setAddForm]     = useState({ name: "", description: "", qty: "", unit: "", room: defaultRoom, box: "", status: "In Stock" });
+  const [commandInput, setCommandInput] = useState("");
+  const [llmLoading,   setLlmLoading]   = useState(false);
+  const [commandError, setCommandError] = useState(null);
+  const [commandSource] = useState("text");
   const [roomForm,     setRoomForm]    = useState("");
   const [boxForm,      setBoxForm]     = useState({ room: defaultRoom, name: "" });
   const [searchQuery,  setSearchQuery] = useState("");
@@ -472,7 +588,7 @@ function SemanticInventory() {
 
   const toast = (msg, type = "success") => {
     setNotif({ msg, type });
-    setTimeout(() => setNotif(null), 3500);
+    setTimeout(() => setNotif(null), 3000);
   };
 
   useEffect(() => {
@@ -578,6 +694,232 @@ function SemanticInventory() {
     return () => { live = false; cancelRef.current = true; };
   }, [modelStatus]);
 
+  const COMMAND_NAME_STOPWORDS = new Set([
+    "a", "an", "the", "my", "your", "our", "their", "some",
+    "please", "add", "store", "put", "save", "item", "items",
+    "and", "to", "in", "on", "at", "of", "for", "with", "into",
+  ]);
+
+  function hasMeaningfulName(value) {
+    const tokens = normalizeLabel(value)
+      .toLowerCase()
+      .replace(/[^a-z0-9\\s]/g, " ")
+      .split(/\\s+/)
+      .filter(Boolean);
+    if (!tokens.length) return false;
+    return tokens.some(token => !COMMAND_NAME_STOPWORDS.has(token));
+  }
+
+  const formatStoredConfirmation = item => {
+    const location = [prettyLabel(item.room), prettyLabel(item.box)].filter(Boolean).join(" › ");
+    const qty = normalizeLabel(item.qty || "") || "1";
+    return \`\${prettyLabel(item.name)} · \${location || "Unassigned"} · \${qty}\`;
+  };
+
+  const embedAndStoreItem = async ({
+    name,
+    qty = "",
+    unit = "",
+    room = "",
+    box = "",
+    source = "text",
+    description = "",
+    status = "In Stock",
+  }) => {
+    const itemName = normalizeLabel(name);
+    if (!itemName) throw new Error("Could not understand item name");
+
+    const selectedRoom = prettyLabel(room || defaultRoom || "Unassigned");
+    const selectedBox = prettyLabel(box || "");
+    const desc = String(description ?? "").trim();
+    const qtyValue = String(qty ?? "").trim();
+    const unitValue = String(unit ?? "").trim();
+    const vec = await embedText([
+      itemName,
+      desc,
+      selectedBox ? ("Box " + selectedBox) : "",
+      "Room " + selectedRoom,
+    ].filter(Boolean).join(". "));
+
+    try {
+      const stored = await addItem({
+        id: crypto.randomUUID(),
+        name: itemName,
+        room: selectedRoom,
+        box: selectedBox,
+        description: desc,
+        qty: qtyValue,
+        unit: unitValue,
+        status,
+        source: String(source || "text"),
+        vector: vec,
+        addedAt: new Date().toLocaleString(),
+      });
+      setInventory(inv => [...inv, stored]);
+      return stored;
+    } catch (e) {
+      throw new Error("Failed to save item, please try again");
+    }
+  };
+
+  const handleDeleteById = async (id) => {
+    await deleteItem(id);
+    setInventory(inv => inv.filter(i => i.id !== id));
+    setResults(r => r ? r.filter(i => i.id !== id) : r);
+  };
+
+  const handleDeleteByIntent = async (name, room, qty = "all", box = "") => {
+    const targetName = normalizeLabel(name).toLowerCase();
+    const targetRoom = normalizeLabel(room).toLowerCase();
+    const targetBox = normalizeLabel(box).toLowerCase();
+    const deleteQty = parseDeleteQty(qty);
+    if (!targetName) throw new Error("Could not understand item name");
+
+    const ranked = inventory
+      .map(item => {
+        const itemName = normalizeLabel(item.name).toLowerCase();
+        const itemRoom = normalizeLabel(item.room).toLowerCase();
+        const itemBox = normalizeLabel(item.box).toLowerCase();
+        let score = 0;
+
+        if (itemName === targetName) score += 5;
+        else if (itemName.includes(targetName) || targetName.includes(itemName)) score += 2;
+        else return null;
+
+        if (targetRoom) {
+          if (itemRoom === targetRoom) score += 3;
+          else if (itemRoom.includes(targetRoom) || targetRoom.includes(itemRoom)) score += 1;
+          else return null;
+        }
+
+        if (targetBox) {
+          if (itemBox === targetBox) score += 2;
+          else if (itemBox.includes(targetBox) || targetBox.includes(itemBox)) score += 1;
+          else return null;
+        }
+        return { item, score };
+      })
+      .filter(Boolean)
+      .sort((a, b) => b.score - a.score);
+
+    const best = ranked.find(candidate => candidate.score > 0)?.item;
+    if (!best) {
+      toast("Item not found. Try a more specific name.", "error");
+      return false;
+    }
+
+    const loc = [best.room, best.box].filter(Boolean).join(" › ");
+    const currentQty = Number(normalizeLabel(best.qty));
+    const hasNumericQty = isFinite(currentQty) && currentQty > 0;
+
+    if (deleteQty === "all" || !hasNumericQty || deleteQty >= currentQty) {
+      await handleDeleteById(best.id);
+      toast(\`Removed: \${best.name}\${loc ? \` · \${loc}\` : ""} · all\`);
+      return true;
+    }
+
+    const nextQty = String(Math.max(1, currentQty - deleteQty));
+    const updated = { ...best, qty: nextQty };
+    try {
+      await addItem(updated);
+      setInventory(prev => prev.map(item => item.id === best.id ? updated : item));
+      setResults(prev => prev ? prev.map(item => item.id === best.id ? { ...item, qty: nextQty } : item) : prev);
+      toast(\`Removed: \${best.name}\${loc ? \` · \${loc}\` : ""} · \${deleteQty}\`);
+    } catch (e) {
+      throw new Error("Failed to save item, please try again");
+    }
+    return true;
+  };
+
+  const handleCommandSubmit = async () => {
+    const rawText = String(commandInput ?? "").trim();
+    setCommandError(null);
+
+    if (!rawText) {
+      setCommandError("Please enter an item name");
+      toast("Please enter an item name", "error");
+      return;
+    }
+    if (modelStatus !== "ready") {
+      setCommandError("Model still loading, please wait");
+      toast("Model still loading, please wait", "error");
+      return;
+    }
+
+    const activeRoom = prettyLabel(defaultRoom || "Garage");
+    const activeBox = "";
+
+    setLlmLoading(true);
+    setError(null);
+    try {
+      const llmRawResult = await sendToLLM(rawText, activeRoom, activeBox);
+      const parsedResult = validateIntentResult(llmRawResult, rawText, activeRoom, activeBox);
+      await routeIntentResult(parsedResult);
+    } catch (e) {
+      const message = String(e?.message ?? e);
+      if (message === "Could not understand item name" || message === "Failed to save item, please try again") {
+        setCommandError(message);
+        toast(message, "error");
+      } else {
+        setCommandError("Sorry, I didn't understand that. Try again.");
+        toast("Sorry, I didn't understand that. Try again.", "error");
+      }
+    } finally {
+      setLlmLoading(false);
+    }
+  };
+
+  const routeIntentResult = async (result) => {
+    switch (result.intent) {
+      case "add": {
+        setLoading(l => ({ ...l, add: true }));
+        setError(null);
+        const storedItems = [];
+        try {
+          for (const item of result.items) {
+            const parsedName = normalizeLabel(item?.name);
+            if (!parsedName || !hasMeaningfulName(parsedName)) {
+              throw new Error("Could not understand item name");
+            }
+            const parsedQty = coerceQty(item?.qty, 1);
+            const stored = await embedAndStoreItem({
+              name: parsedName,
+              qty: parsedQty,
+              room: prettyLabel(item?.room || defaultRoom || "Unassigned"),
+              box: prettyLabel(item?.box || ""),
+              source: commandSource,
+              description: "",
+              status: "In Stock",
+            });
+            storedItems.push(stored);
+          }
+          if (!storedItems.length) throw new Error("Could not understand item name");
+          const message = storedItems.length === 1
+            ? \`✓ Stored: \${formatStoredConfirmation(storedItems[0])}\`
+            : \`✓ Stored: \${storedItems.map(formatStoredConfirmation).join(" | ")}\`;
+          toast(message);
+          setCommandInput("");
+        } finally {
+          setLoading(l => ({ ...l, add: false }));
+        }
+        break;
+      }
+      case "search":
+        setSearchQuery(result.query);
+        setActiveTab("search");
+        await handleSearch(result.query);
+        break;
+      case "delete":
+        await handleDeleteByIntent(result.name, result.room, result.qty, result.box);
+        break;
+      case "unknown":
+      default:
+        setCommandError("Sorry, I didn't understand that. Try again.");
+        toast("Sorry, I didn't understand that. Try again.", "error");
+        break;
+    }
+  };
+
   // ── Add ───────────────────────────────────────────────────────────────────
   const handleAdd = async () => {
     const itemName = normalizeLabel(addForm.name);
@@ -588,32 +930,31 @@ function SemanticInventory() {
     if (!rooms.some(r => normalizeLabel(r).toLowerCase() === selectedRoom.toLowerCase())) {
       return toast("Selected room does not exist.", "error");
     }
-    setLoading(l => ({ ...l, add: true })); setError(null);
+    setLoading(l => ({ ...l, add: true }));
+    setError(null);
     try {
-      const desc = String(addForm.description ?? "").trim();
-      const selectedBox = prettyLabel(addForm.box);
-      const vec  = await embedText([
-        itemName,
-        desc,
-        selectedBox ? ("Box " + selectedBox) : "",
-        "Room " + selectedRoom,
-      ].filter(Boolean).join(". "));
-      const stored = await addItem({
-        id: crypto.randomUUID(),
+      const stored = await embedAndStoreItem({
         name: itemName,
+        qty: String(addForm.qty ?? "").trim(),
+        unit: String(addForm.unit ?? "").trim(),
         room: selectedRoom,
-        box: selectedBox,
-        description: desc,
-        qty: String(addForm.qty ?? "").trim(), unit: String(addForm.unit ?? "").trim(),
-        status: addForm.status, vector: vec, addedAt: new Date().toLocaleString(),
+        box: prettyLabel(addForm.box),
+        source: "text",
+        description: String(addForm.description ?? "").trim(),
+        status: addForm.status,
       });
-      setInventory(inv => [...inv, stored]);
       setAddForm({ name: "", description: "", qty: "", unit: "", room: selectedRoom, box: "", status: "In Stock" });
       const loc = [stored.room, stored.box].filter(Boolean).join(" › ");
       toast(\`"\${stored.name}" stored in \${loc || "Unassigned"} ✓\`);
       if (isMobile) setActiveTab("inventory");
     } catch (e) {
-      setError(String(e?.message ?? e)); toast("Embedding failed.", "error");
+      const message = String(e?.message ?? e);
+      setError(message);
+      if (message === "Failed to save item, please try again") {
+        toast(message, "error");
+      } else {
+        toast("Embedding failed.", "error");
+      }
     } finally {
       setLoading(l => ({ ...l, add: false }));
     }
@@ -658,19 +999,22 @@ function SemanticInventory() {
   };
 
   // ── Search ────────────────────────────────────────────────────────────────
-  const handleSearch = async () => {
-    const q = String(searchQuery ?? "").trim();
+  const handleSearch = async (queryOverride = null) => {
+    const q = String(queryOverride ?? searchQuery ?? "").trim();
     if (!q) return toast("Enter a search query.", "error");
     if (!inventory.length) return toast("Inventory is empty.", "error");
     if (modelStatus !== "ready") return toast("Model not ready.", "error");
+    if (queryOverride !== null && queryOverride !== undefined) setSearchQuery(q);
     setLoading(l => ({ ...l, search: true })); setResults(null); setError(null);
     try {
       const qVec = await embedQuery(q);
       qVec.__queryText = q;
       const k = Math.max(1, Math.min(topK, inventory.length));
       setResults(searchItems(qVec, inventory, k));
+      return true;
     } catch (e) {
       setError(String(e?.message ?? e)); toast("Search failed.", "error");
+      return false;
     } finally {
       setLoading(l => ({ ...l, search: false }));
     }
@@ -678,9 +1022,7 @@ function SemanticInventory() {
 
   const handleDelete = async (id) => {
     try {
-      await deleteItem(id);
-      setInventory(inv => inv.filter(i => i.id !== id));
-      setResults(r => r ? r.filter(i => i.id !== id) : r);
+      await handleDeleteById(id);
     } catch (e) {
       setError(\`Delete failed: \${String(e?.message ?? e)}\`);
       toast("Delete failed.", "error");
@@ -744,7 +1086,8 @@ function SemanticInventory() {
     }
   };
 
-  const busy = loading.add || loading.search;
+  const busy = loading.add || loading.search || llmLoading;
+  const commandBusy = llmLoading || loading.add;
   const seedPct = seedProg.total > 0 ? (seedProg.done / seedProg.total) * 100 : 0;
   const displayItems = (activeTab === "search" && results !== null) ? results : inventory;
   const knownRooms = Array.from(new Set([
@@ -1151,6 +1494,40 @@ function SemanticInventory() {
           {activeTab === "add" && (
             <div className="glass" style={m.addForm}>
               <div style={m.secLabel}>ADD ITEM</div>
+              <div className="glass" style={{ borderRadius:10, padding:10, display:"flex", flexDirection:"column", gap:8 }}>
+                <div style={{ fontSize:11, color:"#94a3b8", letterSpacing:"0.5px" }}>NATURAL-LANGUAGE COMMAND</div>
+                <div style={{ fontSize:11, color:"#64748b", lineHeight:1.5 }}>
+                  Use either quick command or manual form below.
+                </div>
+                <textarea
+                  className="glass-input"
+                  style={{ ...m.inp, minHeight:72, resize:"vertical" }}
+                  placeholder={'Try: "add 2 wrenches in the garage"'}
+                  value={commandInput}
+                  onChange={e => {
+                    setCommandInput(e.target.value);
+                    if (commandError) setCommandError(null);
+                  }}
+                  onKeyDown={e => {
+                    if (e.key === "Enter" && !e.shiftKey) {
+                      e.preventDefault();
+                      if (!commandBusy) handleCommandSubmit();
+                    }
+                  }}
+                  disabled={commandBusy}
+                />
+                <button
+                  className="glass-btn"
+                  style={m.btn("primary", commandBusy)}
+                  onClick={handleCommandSubmit}
+                  disabled={commandBusy}
+                >
+                  {llmLoading ? "Thinking…" : loading.add ? "Saving…" : "Run Command"}
+                </button>
+                {commandError && <div style={{ fontSize:11, color:"#f87171" }}>{commandError}</div>}
+              </div>
+
+              <div style={{ ...m.secLabel, marginTop:2 }}>MANUAL ENTRY</div>
               <input
                 className="glass-input"
                 style={m.inp} placeholder="Item name *"
@@ -1270,6 +1647,39 @@ function SemanticInventory() {
           <div>
             <div style={d.secLbl}>Add Item</div>
             <div style={d.form}>
+              <div className="glass" style={{ borderRadius:10, padding:10, display:"flex", flexDirection:"column", gap:8 }}>
+                <div style={{ fontSize:11, color:"#94a3b8", letterSpacing:"0.5px" }}>NATURAL-LANGUAGE COMMAND</div>
+                <div style={{ fontSize:11, color:"#64748b", lineHeight:1.5 }}>
+                  Use either quick command or manual form below.
+                </div>
+                <textarea
+                  className="glass-input"
+                  style={{ ...d.ta, minHeight:68 }}
+                  placeholder={'Try: "where is my hammer"'}
+                  value={commandInput}
+                  onChange={e => {
+                    setCommandInput(e.target.value);
+                    if (commandError) setCommandError(null);
+                  }}
+                  onKeyDown={e => {
+                    if (e.key === "Enter" && !e.shiftKey) {
+                      e.preventDefault();
+                      if (!commandBusy) handleCommandSubmit();
+                    }
+                  }}
+                  disabled={commandBusy}
+                />
+                <button
+                  className="glass-btn"
+                  style={d.btn("primary", commandBusy)}
+                  disabled={commandBusy}
+                  onClick={handleCommandSubmit}
+                >
+                  {llmLoading ? "Thinking…" : loading.add ? "Saving…" : "Run Command"}
+                </button>
+                {commandError && <div style={{ fontSize:11, color:"#f87171" }}>{commandError}</div>}
+              </div>
+              <div style={{ ...d.secLbl, marginBottom:0 }}>Manual Entry</div>
               <input className="glass-input" style={d.inp} placeholder="Item name *" value={addForm.name} onChange={e => setAddForm(f => ({ ...f, name: e.target.value }))} disabled={modelStatus !== "ready"} />
               <textarea className="glass-input" style={d.ta} placeholder="Description (boosts semantic accuracy)" value={addForm.description} onChange={e => setAddForm(f => ({ ...f, description: e.target.value }))} disabled={modelStatus !== "ready"} />
               <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:6 }}>
