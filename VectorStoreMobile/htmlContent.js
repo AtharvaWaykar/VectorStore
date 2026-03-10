@@ -579,6 +579,10 @@ function SemanticInventory() {
   const [isMobile,     setIsMobile]    = useState(window.innerWidth <= 768);
   const [boxMove,      setBoxMove]     = useState({ fromRoom: defaultRoom, box: "", toRoom: defaultRoom });
   const cancelRef = useRef(false);
+  // Refs so window.vectorStoreAPI always holds the latest closure
+  const embedAndStoreRef = useRef(null);
+  const handleDeleteRef  = useRef(null);
+  const seedRef          = useRef(null);
 
   useEffect(() => {
     const handler = () => setIsMobile(window.innerWidth <= 768);
@@ -636,7 +640,7 @@ function SemanticInventory() {
     return () => { live = false; };
   }, []);
 
-  // ── Seed ──────────────────────────────────────────────────────────────────
+  // ── Load persisted items (seed is gated — call window.vectorStoreAPI.seedSampleData() manually) ──
   useEffect(() => {
     if (modelStatus !== "ready") return;
     cancelRef.current = false;
@@ -645,49 +649,13 @@ function SemanticInventory() {
       try {
         const persisted = await getAllItems();
         if (!live || cancelRef.current) return;
-        if (persisted.length > 0) {
-          setInventory(persisted.map(item => ({
-            ...item,
-            room: item.room || "Unassigned",
-            box: item.box || "",
-          })));
-          setSeeding(false);
-          setSeedProg({ done: 0, total: 0, current: "" });
-          return;
-        }
-
-        setSeeding(true);
-        setSeedProg({ done: 0, total: SEED_ITEMS.length, current: "" });
-        const acc = [];
-        for (let i = 0; i < SEED_ITEMS.length; i++) {
-          if (!live || cancelRef.current) break;
-          const item = SEED_ITEMS[i];
-          if (live) setSeedProg({ done: i, total: SEED_ITEMS.length, current: item.name });
-          try {
-            const seedRoom = "Unassigned";
-            const seedBox = "Starter Box";
-            const vec = await embedText(\`\${item.name}. \${item.description}. Box \${seedBox}. Room \${seedRoom}\`);
-            const stored = await addItem({
-              id: crypto.randomUUID(),
-              ...item,
-              room: seedRoom,
-              box: seedBox,
-              vector: vec,
-              addedAt: new Date().toLocaleString(),
-            });
-            acc.push(stored);
-            if (live) {
-              setInventory([...acc]);
-              setSeedProg({ done: i + 1, total: SEED_ITEMS.length, current: item.name });
-            }
-          } catch (e) {
-            if (live) setSeedProg({ done: i + 1, total: SEED_ITEMS.length, current: item.name });
-          }
-        }
+        setInventory(persisted.map(item => ({
+          ...item,
+          room: item.room || "Unassigned",
+          box: item.box || "",
+        })));
       } catch (e) {
         if (live) setError(\`Storage failed: \${String(e?.message ?? e)}\`);
-      } finally {
-        if (live) setSeeding(false);
       }
     }
     run();
@@ -719,24 +687,18 @@ function SemanticInventory() {
   const embedAndStoreItem = async ({
     name,
     qty = "",
-    unit = "",
     room = "",
     box = "",
     source = "text",
-    description = "",
-    status = "In Stock",
   }) => {
     const itemName = normalizeLabel(name);
     if (!itemName) throw new Error("Could not understand item name");
 
     const selectedRoom = prettyLabel(room || defaultRoom || "Unassigned");
     const selectedBox = prettyLabel(box || "");
-    const desc = String(description ?? "").trim();
     const qtyValue = String(qty ?? "").trim();
-    const unitValue = String(unit ?? "").trim();
     const vec = await embedText([
       itemName,
-      desc,
       selectedBox ? ("Box " + selectedBox) : "",
       "Room " + selectedRoom,
     ].filter(Boolean).join(". "));
@@ -745,12 +707,9 @@ function SemanticInventory() {
       const stored = await addItem({
         id: crypto.randomUUID(),
         name: itemName,
+        qty: qtyValue,
         room: selectedRoom,
         box: selectedBox,
-        description: desc,
-        qty: qtyValue,
-        unit: unitValue,
-        status,
         source: String(source || "text"),
         vector: vec,
         addedAt: new Date().toLocaleString(),
@@ -804,8 +763,7 @@ function SemanticInventory() {
 
     const best = ranked.find(candidate => candidate.score > 0)?.item;
     if (!best) {
-      toast("Item not found. Try a more specific name.", "error");
-      return false;
+      throw new Error("Item not found. Try a more specific name.");
     }
 
     const loc = [best.room, best.box].filter(Boolean).join(" › ");
@@ -830,6 +788,56 @@ function SemanticInventory() {
     }
     return true;
   };
+
+  // ── Expose API on window for external callers (e.g. Person A's intent pipeline) ──
+  embedAndStoreRef.current = embedAndStoreItem;
+  handleDeleteRef.current  = handleDeleteByIntent;
+  seedRef.current = async () => {
+    if (modelStatus !== "ready") throw new Error("Model not ready yet");
+    setSeeding(true);
+    setSeedProg({ done: 0, total: SEED_ITEMS.length, current: "" });
+    const acc = [];
+    try {
+      for (let i = 0; i < SEED_ITEMS.length; i++) {
+        const item = SEED_ITEMS[i];
+        setSeedProg({ done: i, total: SEED_ITEMS.length, current: item.name });
+        try {
+          const stored = await embedAndStoreItem({ name: item.name, qty: item.qty, source: "seed" });
+          acc.push(stored);
+          setSeedProg({ done: i + 1, total: SEED_ITEMS.length, current: item.name });
+        } catch (e) {
+          setSeedProg({ done: i + 1, total: SEED_ITEMS.length, current: item.name });
+        }
+      }
+    } finally {
+      setSeeding(false);
+    }
+    return acc;
+  };
+
+  useEffect(() => {
+    window.vectorStoreAPI = {
+      /**
+       * Embed and store an item.
+       * @param {{ name: string, qty?: string, room?: string, box?: string, source?: string }} item
+       * @returns {Promise<{ id, name, qty, room, box, vector, source, addedAt }>}
+       */
+      embedAndStore: (item) => embedAndStoreRef.current(item),
+      /**
+       * Delete an item by name and room (fuzzy match).
+       * Throws if item not found.
+       * @param {string} name
+       * @param {string} room
+       * @returns {Promise<boolean>}
+       */
+      handleDelete: (name, room) => handleDeleteRef.current(name, room),
+      /**
+       * Load the 30 sample items into the DB (dev/demo only — not for production).
+       * @returns {Promise<Array>}
+       */
+      seedSampleData: () => seedRef.current(),
+    };
+  }, []);
 
   const handleCommandSubmit = async () => {
     const rawText = String(commandInput ?? "").trim();
@@ -857,7 +865,13 @@ function SemanticInventory() {
       await routeIntentResult(parsedResult);
     } catch (e) {
       const message = String(e?.message ?? e);
-      if (message === "Could not understand item name" || message === "Failed to save item, please try again") {
+      const knownMessages = [
+        "Could not understand item name",
+        "Failed to save item, please try again",
+        "Item not found. Try a more specific name.",
+        "Model not ready yet",
+      ];
+      if (knownMessages.includes(message)) {
         setCommandError(message);
         toast(message, "error");
       } else {
@@ -888,8 +902,6 @@ function SemanticInventory() {
               room: prettyLabel(item?.room || defaultRoom || "Unassigned"),
               box: prettyLabel(item?.box || ""),
               source: commandSource,
-              description: "",
-              status: "In Stock",
             });
             storedItems.push(stored);
           }
@@ -936,12 +948,9 @@ function SemanticInventory() {
       const stored = await embedAndStoreItem({
         name: itemName,
         qty: String(addForm.qty ?? "").trim(),
-        unit: String(addForm.unit ?? "").trim(),
         room: selectedRoom,
         box: prettyLabel(addForm.box),
         source: "text",
-        description: String(addForm.description ?? "").trim(),
-        status: addForm.status,
       });
       setAddForm({ name: "", description: "", qty: "", unit: "", room: selectedRoom, box: "", status: "In Stock" });
       const loc = [stored.room, stored.box].filter(Boolean).join(" › ");
@@ -1779,7 +1788,7 @@ function SemanticInventory() {
 }
 
 // ─── Mobile styles ────────────────────────────────────────────────────────────
-const FF = "'DM Mono','Courier New',monospace";
+const FF = "'DM Mono','SF Mono','Fira Code','Fira Mono','Roboto Mono','Courier New',monospace";
 const INPUT_FF = "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif";
 const TYPE = { xs: 12, sm: 13, md: 14, lg: 16, xl: 20 };
 const m = {
