@@ -48,6 +48,7 @@ VectorStore/
 - **New Architecture enabled** (`newArchEnabled: true`)
 - **JavaScript engine:** Hermes
 - **Key dependency:** `react-native-webview` — the entire UI is an embedded HTML page
+- **Native speech input:** `expo-speech-recognition` for Voice tab microphone capture on development builds
 - **AI model:** `@xenova/transformers@2.17.2` → `Xenova/all-MiniLM-L6-v2` (384-dim sentence embeddings)
 - **Storage:** IndexedDB (inside WebView) via `vectorstock-db`
 - **Package manager:** npm
@@ -93,6 +94,8 @@ npm install
 cd ios && pod install && cd ..
 ```
 
+If native iOS config changes (for example microphone or speech-recognition permissions), rebuild the native app with `npx expo run:ios` so the checked-in `ios/` project picks up the change.
+
 ### Web
 
 No setup required. The web app is served as static files.
@@ -106,16 +109,17 @@ No setup required. The web app is served as static files.
 ```bash
 cd VectorStoreMobile
 
-npm start          # Start Expo dev server (Metro bundler)
-npm run ios        # Launch on iOS Simulator or connected device
-npm run android    # Launch on Android Emulator or connected device
-npm run web        # Launch in browser via Expo web
+npx expo start --dev-client   # Start Metro for the installed development build
+npx expo run:ios              # Build and run on iOS Simulator
+npx expo run:ios --device     # Build and install on a connected physical iPhone
+npx expo run:android          # Build and run on Android Emulator or connected device
+npx expo start --web          # Launch in browser via Expo web
 ```
 
-When running `npm start`, press:
-- `i` to open iOS simulator
-- `a` to open Android emulator
-- `w` to open in web browser
+Notes:
+- Use `npx expo run:ios` for simulator testing.
+- Use `npx expo run:ios --device` for physical-device testing.
+- Voice recording in the mobile app is intended for a development build, not Expo Go.
 
 ### Web — Development
 
@@ -153,6 +157,14 @@ There is currently **no automated test suite**. Manual testing steps:
 
 5. **Delete item** — Remove an item and confirm it no longer appears after reload.
 
+6. **Voice tab (simulator/device)** — Open the Voice tab, tap the large mic button, verify the live mic input meter responds, speak a short phrase, and confirm partial/final transcript updates appear.
+
+7. **Typed fallback (Voice tab)** — Type a natural-language command into the Voice text box and confirm the keyboard remains open while typing and the command submits correctly.
+
+8. **Speech stop flow** — Tap once to start recording and once to stop. Confirm the app transitions to processing and auto-submits the final transcript without needing a second stop tap.
+
+9. **Physical-device install** — For real mic testing on iPhone, connect the device and run `npx expo run:ios --device`, then use `npx expo start --dev-client` for subsequent reloads.
+
 ### Confirmed Working (from git history)
 
 - Search ranking function
@@ -166,11 +178,11 @@ There is currently **no automated test suite**. Manual testing steps:
 
 ### How the Mobile App Works
 
-`App.js` renders a `WebView` that loads the full HTML/CSS/JS application from `htmlContent.js` (an inline string export). There are no native React Native UI components — the entire interface is browser-based inside the WebView. This means:
+`App.js` renders a `WebView` that loads the full HTML/CSS/JS application from `htmlContent.js` (an inline string export). There are no native React Native UI components for the inventory UI itself — the interface is browser-based inside the WebView. Voice recording is the main native exception: `App.js` bridges `expo-speech-recognition` events into the WebView so the Voice tab in `htmlContent.js` can show status, mic input level, transcripts, and debug events. This means:
 
 - All AI logic runs in the WebView's JS engine, not the React Native JS thread.
 - Changes to the UI require editing `htmlContent.js`.
-- Platform-specific adjustments (e.g., iOS safe-area padding) are handled via `Platform.OS` in `App.js`.
+- Platform-specific adjustments (e.g., iOS safe-area padding and native voice bridging) are handled in `App.js`.
 
 ### AI Embeddings
 
@@ -213,6 +225,7 @@ All configuration is hardcoded. Key values to know if modifying:
 | IndexedDB name | `vectorstock-db` | `htmlContent.js`, `VectorStoreWeb/app.js` |
 | App bundle ID (iOS) | `com.anonymous.VectorStoreMobile` | `app.json` |
 | Expo slug | `VectorStoreMobile` | `app.json` |
+| Voice permissions | microphone + speech recognition usage strings | `app.json`, `ios/VectorStoreMobile/Info.plist` |
 
 No `.env` files or environment variables are required.
 
@@ -224,9 +237,11 @@ No `.env` files or environment variables are required.
 |---|---|---|
 | `pod install` fails | CocoaPods version mismatch | `sudo gem update cocoapods && pod install` |
 | Model download hangs | Network / CORS | Use a local HTTP server (not `file://`) for web |
-| Blank WebView on iOS | Metro bundler not running | Ensure `npm start` is running before `npm run ios` |
+| Blank WebView on iOS | Metro bundler not running | Ensure `npx expo start --dev-client` is running before launching the development build |
 | IndexedDB quota exceeded | Too many items stored | Clear app storage in device settings |
 | Expo version mismatch | Wrong Node/npm version | Use Node 18+ and run `npm install` fresh |
+| Voice feature crashes on iOS permissions | Native plist missing speech/mic usage strings | Rebuild with `npx expo run:ios` after config changes |
+| Voice tab mic disabled in Expo Go | Native speech module unavailable in Expo Go | Use a development build on simulator/device instead |
 
 ---
 
