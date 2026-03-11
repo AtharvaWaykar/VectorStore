@@ -1451,67 +1451,9 @@ function SemanticInventory() {
           display:"flex",
           flexDirection:"column",
           gap:12,
+          minHeight: compact ? "calc(100vh - 260px)" : 560,
           animation: voiceShake ? "shakeX 0.3s ease" : "none",
         }}>
-          <div style={{ display:"flex", alignItems:"center", gap:12 }}>
-            <button
-              className={voiceStatus === "recording" ? "glow-active" : ""}
-              style={{
-                width:56,
-                height:56,
-                minWidth:56,
-                minHeight:56,
-                borderRadius:"50%",
-                border:"1px solid rgba(148, 163, 184, 0.22)",
-                background: voiceStatus === "recording"
-                  ? "linear-gradient(135deg, rgba(239, 68, 68, 0.95), rgba(59, 130, 246, 0.92))"
-                  : "rgba(15, 23, 42, 0.82)",
-                color:"#f8fafc",
-                fontSize:20,
-                cursor: micDisabled ? "not-allowed" : "pointer",
-                opacity: micDisabled ? 0.45 : 1,
-                animation: voiceStatus === "recording" ? "pulse 1s ease-in-out infinite" : "none",
-                touchAction:"manipulation",
-              }}
-              onPointerUp={handleVoiceTogglePress}
-              disabled={micDisabled}
-              title={voiceSupportsMic ? "Toggle microphone recording" : "Voice not supported on this build"}
-            >
-              {voiceStatus === "processing" ? "⟳" : "🎙️"}
-            </button>
-            <div style={{ flex:1, minWidth:0 }}>
-              <div style={{ fontSize:13, color:"#e2e8f0", marginBottom:4 }}>{voiceStatusLabel}</div>
-              <div style={{ fontSize:11, color: voiceSupportsMic ? "#67e8f9" : "#94a3b8", lineHeight:1.5 }}>
-                {voiceSupportsMic
-                  ? "Press once to start recording. Press again to stop and auto-submit."
-                  : "Expo Go and unsupported builds keep the typed fallback, but microphone recording is disabled."}
-              </div>
-              {!commandReady && (
-                <div style={{ fontSize:11, color:"#fbbf24", marginTop:6 }}>
-                  The embedding model is still loading. Voice commands unlock once initialization completes.
-                </div>
-              )}
-              {voiceSupportsMic && (
-                <div style={{ marginTop:8 }}>
-                  <div style={{ display:"flex", justifyContent:"space-between", fontSize:10, color:"#64748b", marginBottom:4 }}>
-                    <span>Mic input</span>
-                    <span>{voiceStatus === "recording" ? (voiceMeterLevel > 0.08 ? "Hearing audio" : "Waiting for speech") : "Idle"}</span>
-                  </div>
-                  <div style={{ height:6, borderRadius:999, overflow:"hidden", background:"rgba(30, 41, 59, 0.55)" }}>
-                    <div style={{
-                      height:"100%",
-                      width:\`\${Math.max(8, voiceMeterLevel * 100)}%\`,
-                      background: voiceStatus === "recording"
-                        ? "linear-gradient(90deg, #22d3ee, #38bdf8, #60a5fa)"
-                        : "rgba(100, 116, 139, 0.45)",
-                      transition:"width 0.12s linear",
-                    }} />
-                  </div>
-                </div>
-              )}
-            </div>
-          </div>
-
           <textarea
             className="glass-input"
             style={compact ? { ...m.inp, minHeight:96, resize:"vertical" } : { ...d.ta, minHeight:110 }}
@@ -1536,6 +1478,43 @@ function SemanticInventory() {
           </div>
 
           {voiceError && <div style={{ fontSize:11, color:"#f87171" }}>{voiceError}</div>}
+
+          <div style={{
+            display:"flex",
+            flexDirection:"column",
+            gap:10,
+          }}>
+            <div style={{ fontSize:13, color:"#e2e8f0" }}>{voiceStatusLabel}</div>
+            <div style={{ fontSize:11, color: voiceSupportsMic ? "#67e8f9" : "#94a3b8", lineHeight:1.5 }}>
+              {voiceSupportsMic
+                ? "Press once to start recording. Press again to stop and auto-submit."
+                : "Expo Go and unsupported builds keep the typed fallback, but microphone recording is disabled."}
+            </div>
+            {!commandReady && (
+              <div style={{ fontSize:11, color:"#fbbf24" }}>
+                The embedding model is still loading. Voice commands unlock once initialization completes.
+              </div>
+            )}
+            {voiceSupportsMic && (
+              <div>
+                <div style={{ display:"flex", justifyContent:"space-between", fontSize:10, color:"#64748b", marginBottom:4 }}>
+                  <span>Mic input</span>
+                  <span>{voiceStatus === "recording" ? (voiceMeterLevel > 0.08 ? "Hearing audio" : "Waiting for speech") : "Idle"}</span>
+                </div>
+                <div style={{ height:6, borderRadius:999, overflow:"hidden", background:"rgba(30, 41, 59, 0.55)" }}>
+                  <div style={{
+                    height:"100%",
+                    width:\`\${Math.max(8, voiceMeterLevel * 100)}%\`,
+                    background: voiceStatus === "recording"
+                      ? "linear-gradient(90deg, #22d3ee, #38bdf8, #60a5fa)"
+                      : "rgba(100, 116, 139, 0.45)",
+                    transition:"width 0.12s linear",
+                  }} />
+                </div>
+              </div>
+            )}
+          </div>
+
           <div style={{
             borderTop:"1px solid rgba(148, 163, 184, 0.12)",
             paddingTop:10,
@@ -1568,6 +1547,48 @@ function SemanticInventory() {
                     {entry.detail ? ": " + entry.detail : ""}
                   </div>
                 ))}
+            </div>
+          </div>
+
+          <div style={{
+            marginTop:"auto",
+            display:"flex",
+            flexDirection:"column",
+            alignItems:"center",
+            justifyContent:"center",
+            gap:10,
+            paddingTop:10,
+          }}>
+            <button
+              className={voiceStatus === "recording" ? "glow-active" : ""}
+              style={{
+                width: compact ? 96 : 112,
+                height: compact ? 96 : 112,
+                minWidth: compact ? 96 : 112,
+                minHeight: compact ? 96 : 112,
+                borderRadius:"50%",
+                border:"1px solid rgba(148, 163, 184, 0.22)",
+                background: voiceStatus === "recording"
+                  ? "linear-gradient(135deg, rgba(239, 68, 68, 0.95), rgba(59, 130, 246, 0.92))"
+                  : "rgba(15, 23, 42, 0.82)",
+                color:"#f8fafc",
+                fontSize: compact ? 34 : 40,
+                cursor: micDisabled ? "not-allowed" : "pointer",
+                opacity: micDisabled ? 0.45 : 1,
+                animation: voiceStatus === "recording" ? "pulse 1s ease-in-out infinite" : "none",
+                touchAction:"manipulation",
+                boxShadow: voiceStatus === "recording"
+                  ? "0 0 24px rgba(59, 130, 246, 0.35)"
+                  : "0 12px 32px rgba(0, 0, 0, 0.24)",
+              }}
+              onPointerUp={handleVoiceTogglePress}
+              disabled={micDisabled}
+              title={voiceSupportsMic ? "Toggle microphone recording" : "Voice not supported on this build"}
+            >
+              {voiceStatus === "processing" ? "⟳" : "🎙️"}
+            </button>
+            <div style={{ fontSize:11, color:"#94a3b8", textAlign:"center" }}>
+              {voiceStatus === "recording" ? "Tap to stop and submit" : "Tap to start recording"}
             </div>
           </div>
         </div>

@@ -43,3 +43,6 @@ yarn-error.*
 
 # claude
 .claude/
+
+# local docs
+docs/
