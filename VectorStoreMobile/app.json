@@ -25,6 +25,15 @@
     },
     "web": {
       "favicon": "./assets/favicon.png"
-    }
+    },
+    "plugins": [
+      [
+        "expo-speech-recognition",
+        {
+          "microphonePermission": "Allow $(PRODUCT_NAME) to use the microphone for voice inventory commands.",
+          "speechRecognitionPermission": "Allow $(PRODUCT_NAME) to transcribe your voice inventory commands."
+        }
+      ]
+    ]
   }
 }

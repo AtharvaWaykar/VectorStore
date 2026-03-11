@@ -185,6 +185,13 @@ export const HTML = `<!DOCTYPE html>
     @keyframes slideUp { from { transform: translateY(14px); opacity: 0; } to { transform: none; opacity: 1; } }
     @keyframes slideInRight { from { transform: translateX(100%); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
     @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
+    @keyframes shakeX {
+      0%, 100% { transform: translateX(0); }
+      20% { transform: translateX(-4px); }
+      40% { transform: translateX(4px); }
+      60% { transform: translateX(-3px); }
+      80% { transform: translateX(3px); }
+    }
     @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
 
     input:focus, textarea:focus, select:focus {
@@ -235,6 +242,26 @@ export const HTML = `<!DOCTYPE html>
 
   <script type="text/babel">
 const { useState, useEffect, useRef, useCallback } = React;
+
+window.__VECTORSTOCK_NATIVE_QUEUE__ = window.__VECTORSTOCK_NATIVE_QUEUE__ || [];
+window.__VECTORSTOCK_NATIVE_BRIDGE__ = window.__VECTORSTOCK_NATIVE_BRIDGE__ || {
+  receive(payload) {
+    window.__VECTORSTOCK_NATIVE_QUEUE__.push(payload);
+  },
+};
+
+function postNativeMessage(payload) {
+  if (!window.ReactNativeWebView || typeof window.ReactNativeWebView.postMessage !== "function") {
+    return false;
+  }
+
+  try {
+    window.ReactNativeWebView.postMessage(JSON.stringify(payload));
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 // ─── Utility Functions ─────────────────────────────────────────────────────────
 function cosineSimilarity(a, b) {
@@ -567,7 +594,13 @@ function SemanticInventory() {
   const [commandInput, setCommandInput] = useState("");
   const [llmLoading,   setLlmLoading]   = useState(false);
   const [commandError, setCommandError] = useState(null);
-  const [commandSource] = useState("text");
+  const [voiceDraft,   setVoiceDraft]   = useState("");
+  const [voiceStatus,  setVoiceStatus]  = useState(window.ReactNativeWebView ? "checking" : "disabled");
+  const [voiceMode,    setVoiceMode]    = useState(window.ReactNativeWebView ? "checking" : "disabled");
+  const [voiceLevel,   setVoiceLevel]   = useState(-2);
+  const [voiceError,   setVoiceError]   = useState(null);
+  const [voiceShake,   setVoiceShake]   = useState(false);
+  const [voiceDebugEvents, setVoiceDebugEvents] = useState([]);
   const [roomForm,     setRoomForm]    = useState("");
   const [boxForm,      setBoxForm]     = useState({ room: defaultRoom, name: "" });
   const [searchQuery,  setSearchQuery] = useState("");
@@ -579,6 +612,8 @@ function SemanticInventory() {
   const [isMobile,     setIsMobile]    = useState(window.innerWidth <= 768);
   const [boxMove,      setBoxMove]     = useState({ fromRoom: defaultRoom, box: "", toRoom: defaultRoom });
   const cancelRef = useRef(false);
+  const llmLoadingRef = useRef(false);
+  const submitCommandRef = useRef(null);
   // Refs so window.vectorStoreAPI always holds the latest closure
   const embedAndStoreRef = useRef(null);
   const handleDeleteRef  = useRef(null);
@@ -589,6 +624,97 @@ function SemanticInventory() {
     window.addEventListener('resize', handler);
     return () => window.removeEventListener('resize', handler);
   }, []);
+
+  useEffect(() => {
+    llmLoadingRef.current = llmLoading;
+  }, [llmLoading]);
+
+  const triggerVoiceError = useCallback((message) => {
+    setVoiceError(message);
+    setVoiceStatus("error");
+    setVoiceLevel(-2);
+    setVoiceShake(true);
+    window.setTimeout(() => setVoiceShake(false), 320);
+    window.setTimeout(() => {
+      setVoiceStatus(current => current === "error" ? (voiceMode === "native" ? "idle" : "disabled") : current);
+    }, 900);
+  }, [voiceMode]);
+
+  useEffect(() => {
+    const fallbackReceiver = (payload) => {
+      window.__VECTORSTOCK_NATIVE_QUEUE__.push(payload);
+    };
+
+    const handleNativePayload = (payload) => {
+      if (!payload || typeof payload !== "object") return;
+
+      if (payload.type === "voice/capabilities") {
+        const nextMode = payload.mode === "native" && payload.speechAvailable ? "native" : "disabled";
+        setVoiceMode(nextMode);
+        setVoiceStatus(nextMode === "native" ? "idle" : "disabled");
+        if (nextMode !== "native") setVoiceLevel(-2);
+        return;
+      }
+
+      if (payload.type === "voice/status") {
+        const nextStatus = String(payload.status || "").trim();
+        if (!nextStatus) return;
+        if (nextStatus === "idle" && llmLoadingRef.current) return;
+        setVoiceStatus(nextStatus);
+        if (nextStatus !== "error") setVoiceError(null);
+        if (nextStatus !== "recording") setVoiceLevel(-2);
+        return;
+      }
+
+      if (payload.type === "voice/volume") {
+        setVoiceLevel(Number(payload.value ?? -2));
+        return;
+      }
+
+      if (payload.type === "voice/debug") {
+        const nextEntry = {
+          id: crypto.randomUUID(),
+          event: String(payload.event || "event"),
+          detail: String(payload.detail || ""),
+        };
+        setVoiceDebugEvents(prev => [nextEntry, ...prev].slice(0, 6));
+        return;
+      }
+
+      if (payload.type === "voice/error") {
+        triggerVoiceError(String(payload.message || "Voice recognition failed — please type instead."));
+        return;
+      }
+
+      if (payload.type === "voice/transcript") {
+        const transcript = String(payload.transcript || "").trim();
+        if (!transcript) {
+          triggerVoiceError("Didn't catch that — please try again.");
+          return;
+        }
+        const isFinal = Boolean(payload.isFinal);
+        setVoiceDraft(transcript);
+        setVoiceError(null);
+        setVoiceStatus(isFinal ? "processing" : "recording");
+        if (isFinal) {
+          void submitCommandRef.current?.(transcript, "voice", "voice");
+        }
+      }
+    };
+
+    window.__VECTORSTOCK_NATIVE_BRIDGE__.receive = handleNativePayload;
+
+    const pending = Array.isArray(window.__VECTORSTOCK_NATIVE_QUEUE__)
+      ? [...window.__VECTORSTOCK_NATIVE_QUEUE__]
+      : [];
+    window.__VECTORSTOCK_NATIVE_QUEUE__ = [];
+    pending.forEach(handleNativePayload);
+    postNativeMessage({ type: "voice/check-support" });
+
+    return () => {
+      window.__VECTORSTOCK_NATIVE_BRIDGE__.receive = fallbackReceiver;
+    };
+  }, [triggerVoiceError]);
 
   const toast = (msg, type = "success") => {
     setNotif({ msg, type });
@@ -839,51 +965,16 @@ function SemanticInventory() {
     };
   }, []);
 
-  const handleCommandSubmit = async () => {
-    const rawText = String(commandInput ?? "").trim();
-    setCommandError(null);
-
-    if (!rawText) {
-      setCommandError("Please enter an item name");
-      toast("Please enter an item name", "error");
-      return;
+  const applyCommandError = useCallback((message, origin = "command") => {
+    if (origin === "voice") {
+      triggerVoiceError(message);
+    } else {
+      setCommandError(message);
     }
-    if (modelStatus !== "ready") {
-      setCommandError("Model still loading, please wait");
-      toast("Model still loading, please wait", "error");
-      return;
-    }
+    toast(message, "error");
+  }, [triggerVoiceError]);
 
-    const activeRoom = prettyLabel(defaultRoom || "Garage");
-    const activeBox = "";
-
-    setLlmLoading(true);
-    setError(null);
-    try {
-      const llmRawResult = await sendToLLM(rawText, activeRoom, activeBox);
-      const parsedResult = validateIntentResult(llmRawResult, rawText, activeRoom, activeBox);
-      await routeIntentResult(parsedResult);
-    } catch (e) {
-      const message = String(e?.message ?? e);
-      const knownMessages = [
-        "Could not understand item name",
-        "Failed to save item, please try again",
-        "Item not found. Try a more specific name.",
-        "Model not ready yet",
-      ];
-      if (knownMessages.includes(message)) {
-        setCommandError(message);
-        toast(message, "error");
-      } else {
-        setCommandError("Sorry, I didn't understand that. Try again.");
-        toast("Sorry, I didn't understand that. Try again.", "error");
-      }
-    } finally {
-      setLlmLoading(false);
-    }
-  };
-
-  const routeIntentResult = async (result) => {
+  const routeIntentResult = async (result, source = "text", origin = "command") => {
     switch (result.intent) {
       case "add": {
         setLoading(l => ({ ...l, add: true }));
@@ -901,7 +992,7 @@ function SemanticInventory() {
               qty: parsedQty,
               room: prettyLabel(item?.room || defaultRoom || "Unassigned"),
               box: prettyLabel(item?.box || ""),
-              source: commandSource,
+              source,
             });
             storedItems.push(stored);
           }
@@ -910,7 +1001,7 @@ function SemanticInventory() {
             ? \`✓ Stored: \${formatStoredConfirmation(storedItems[0])}\`
             : \`✓ Stored: \${storedItems.map(formatStoredConfirmation).join(" | ")}\`;
           toast(message);
-          setCommandInput("");
+          if (origin !== "voice") setCommandInput("");
         } finally {
           setLoading(l => ({ ...l, add: false }));
         }
@@ -926,11 +1017,64 @@ function SemanticInventory() {
         break;
       case "unknown":
       default:
-        setCommandError("Sorry, I didn't understand that. Try again.");
-        toast("Sorry, I didn't understand that. Try again.", "error");
+        applyCommandError("Sorry, I didn't understand that. Try again.", origin);
         break;
     }
   };
+
+  const submitNaturalLanguageCommand = async (rawTextValue, source = "text", origin = "command") => {
+    const rawText = String(rawTextValue ?? "").trim();
+    if (origin !== "voice") setCommandError(null);
+    if (origin === "voice") setVoiceError(null);
+
+    if (!rawText) {
+      applyCommandError("Please enter an item name", origin);
+      return false;
+    }
+    if (modelStatus !== "ready") {
+      applyCommandError("Model still loading, please wait", origin);
+      return false;
+    }
+
+    const activeRoom = prettyLabel(defaultRoom || "Garage");
+    const activeBox = "";
+
+    setLlmLoading(true);
+    if (origin === "voice") setVoiceStatus("processing");
+    setError(null);
+    try {
+      const llmRawResult = await sendToLLM(rawText, activeRoom, activeBox);
+      const parsedResult = validateIntentResult(llmRawResult, rawText, activeRoom, activeBox);
+      await routeIntentResult(parsedResult, source, origin);
+      if (origin === "voice") setVoiceStatus(voiceMode === "native" ? "idle" : "disabled");
+      return true;
+    } catch (e) {
+      const message = String(e?.message ?? e);
+      const knownMessages = [
+        "Could not understand item name",
+        "Failed to save item, please try again",
+        "Item not found. Try a more specific name.",
+        "Model not ready yet",
+      ];
+      if (knownMessages.includes(message)) {
+        applyCommandError(message, origin);
+      } else {
+        applyCommandError("Sorry, I didn't understand that. Try again.", origin);
+      }
+      return false;
+    } finally {
+      setLlmLoading(false);
+      if (origin === "voice") {
+        setVoiceStatus(current => current === "recording" ? current : (voiceMode === "native" ? "idle" : "disabled"));
+      }
+    }
+  };
+
+  const handleCommandSubmit = async () => {
+    await submitNaturalLanguageCommand(commandInput, "text", "command");
+  };
+
+  submitCommandRef.current = submitNaturalLanguageCommand;
 
   // ── Add ───────────────────────────────────────────────────────────────────
   const handleAdd = async () => {
@@ -1097,8 +1241,14 @@ function SemanticInventory() {
 
   const busy = loading.add || loading.search || llmLoading;
   const commandBusy = llmLoading || loading.add;
+  const voiceBusy = voiceStatus === "recording" || voiceStatus === "processing" || llmLoading;
+  const voiceSupportsMic = voiceMode === "native";
   const seedPct = seedProg.total > 0 ? (seedProg.done / seedProg.total) * 100 : 0;
-  const displayItems = (activeTab === "search" && results !== null) ? results : inventory;
+  const displayItems = activeTab === "search" && results !== null
+    ? results
+    : activeTab === "inventory"
+      ? inventory
+      : [];
   const knownRooms = Array.from(new Set([
     ...DEFAULT_ROOMS.map(prettyLabel),
     ...rooms.map(prettyLabel),
@@ -1247,6 +1397,184 @@ function SemanticInventory() {
     </div>
   );
 
+  const voiceStatusLabel = voiceStatus === "recording"
+    ? (voiceDraft.trim() ? "Listening… live transcript is updating below" : "Listening… speak now")
+    : voiceStatus === "processing"
+      ? "Transcribing and sending to the assistant…"
+      : voiceMode === "native"
+        ? "Tap the mic to record a command or type below."
+        : "Voice recording is disabled here. Use the typed backup instead.";
+  const voiceMeterLevel = Math.max(0, Math.min(1, (voiceLevel + 2) / 12));
+
+  const handleVoiceToggle = () => {
+    if (voiceBusy && voiceStatus !== "recording") return;
+    if (modelStatus !== "ready") {
+      triggerVoiceError("Model still loading, please wait");
+      return;
+    }
+    if (!voiceSupportsMic) {
+      triggerVoiceError("Voice recording requires a development build. Use the backup text box instead.");
+      return;
+    }
+    setVoiceError(null);
+    if (voiceStatus === "recording") {
+      setVoiceStatus("processing");
+      setVoiceLevel(-2);
+      postNativeMessage({ type: "voice/stop" });
+      return;
+    }
+    setVoiceDraft("");
+    setVoiceStatus("recording");
+    setVoiceLevel(-2);
+    postNativeMessage({ type: "voice/start" });
+  };
+
+  const handleVoiceTogglePress = (event) => {
+    if (event?.preventDefault) event.preventDefault();
+    handleVoiceToggle();
+  };
+
+  const handleVoiceTypedSubmit = async () => {
+    await submitNaturalLanguageCommand(voiceDraft, "text", "voice");
+  };
+
+  const renderVoicePanel = (compact = false) => {
+    const commandReady = modelStatus === "ready";
+    const micDisabled = !commandReady || !voiceSupportsMic || (voiceBusy && voiceStatus !== "recording");
+
+    return (
+      <div className="glass" style={compact ? m.addForm : { ...d.form, gap:12, maxWidth:760 }}>
+        <div style={compact ? m.secLabel : d.secLbl}>VOICE COMMANDS</div>
+        <div className="glass-card" style={{
+          borderRadius:12,
+          padding: compact ? 14 : 16,
+          display:"flex",
+          flexDirection:"column",
+          gap:12,
+          animation: voiceShake ? "shakeX 0.3s ease" : "none",
+        }}>
+          <div style={{ display:"flex", alignItems:"center", gap:12 }}>
+            <button
+              className={voiceStatus === "recording" ? "glow-active" : ""}
+              style={{
+                width:56,
+                height:56,
+                minWidth:56,
+                minHeight:56,
+                borderRadius:"50%",
+                border:"1px solid rgba(148, 163, 184, 0.22)",
+                background: voiceStatus === "recording"
+                  ? "linear-gradient(135deg, rgba(239, 68, 68, 0.95), rgba(59, 130, 246, 0.92))"
+                  : "rgba(15, 23, 42, 0.82)",
+                color:"#f8fafc",
+                fontSize:20,
+                cursor: micDisabled ? "not-allowed" : "pointer",
+                opacity: micDisabled ? 0.45 : 1,
+                animation: voiceStatus === "recording" ? "pulse 1s ease-in-out infinite" : "none",
+                touchAction:"manipulation",
+              }}
+              onPointerUp={handleVoiceTogglePress}
+              disabled={micDisabled}
+              title={voiceSupportsMic ? "Toggle microphone recording" : "Voice not supported on this build"}
+            >
+              {voiceStatus === "processing" ? "⟳" : "🎙️"}
+            </button>
+            <div style={{ flex:1, minWidth:0 }}>
+              <div style={{ fontSize:13, color:"#e2e8f0", marginBottom:4 }}>{voiceStatusLabel}</div>
+              <div style={{ fontSize:11, color: voiceSupportsMic ? "#67e8f9" : "#94a3b8", lineHeight:1.5 }}>
+                {voiceSupportsMic
+                  ? "Press once to start recording. Press again to stop and auto-submit."
+                  : "Expo Go and unsupported builds keep the typed fallback, but microphone recording is disabled."}
+              </div>
+              {!commandReady && (
+                <div style={{ fontSize:11, color:"#fbbf24", marginTop:6 }}>
+                  The embedding model is still loading. Voice commands unlock once initialization completes.
+                </div>
+              )}
+              {voiceSupportsMic && (
+                <div style={{ marginTop:8 }}>
+                  <div style={{ display:"flex", justifyContent:"space-between", fontSize:10, color:"#64748b", marginBottom:4 }}>
+                    <span>Mic input</span>
+                    <span>{voiceStatus === "recording" ? (voiceMeterLevel > 0.08 ? "Hearing audio" : "Waiting for speech") : "Idle"}</span>
+                  </div>
+                  <div style={{ height:6, borderRadius:999, overflow:"hidden", background:"rgba(30, 41, 59, 0.55)" }}>
+                    <div style={{
+                      height:"100%",
+                      width:\`\${Math.max(8, voiceMeterLevel * 100)}%\`,
+                      background: voiceStatus === "recording"
+                        ? "linear-gradient(90deg, #22d3ee, #38bdf8, #60a5fa)"
+                        : "rgba(100, 116, 139, 0.45)",
+                      transition:"width 0.12s linear",
+                    }} />
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+
+          <textarea
+            className="glass-input"
+            style={compact ? { ...m.inp, minHeight:96, resize:"vertical" } : { ...d.ta, minHeight:110 }}
+            placeholder={'Try: "add a hammer to the garage" or "where is my hammer"'}
+            value={voiceDraft}
+            onChange={e => {
+              setVoiceDraft(e.target.value);
+              if (voiceError) setVoiceError(null);
+            }}
+            disabled={voiceStatus === "recording" || voiceStatus === "processing"}
+          />
+
+          <div style={{ display:"flex", flexWrap:"wrap", gap:8 }}>
+            <button
+              className="glass-btn"
+              style={compact ? m.btn("primary", voiceBusy || !voiceDraft.trim() || !commandReady) : d.btn("primary", voiceBusy || !voiceDraft.trim() || !commandReady)}
+              onClick={handleVoiceTypedSubmit}
+              disabled={voiceBusy || !voiceDraft.trim() || !commandReady}
+            >
+              Send Typed Command
+            </button>
+          </div>
+
+          {voiceError && <div style={{ fontSize:11, color:"#f87171" }}>{voiceError}</div>}
+          <div style={{
+            borderTop:"1px solid rgba(148, 163, 184, 0.12)",
+            paddingTop:10,
+            display:"flex",
+            flexDirection:"column",
+            gap:6,
+          }}>
+            <div style={{ fontSize:10, color:"#94a3b8", letterSpacing:"0.8px" }}>VOICE DEBUG</div>
+            <div style={{ display:"grid", gridTemplateColumns:"repeat(3, minmax(0, 1fr))", gap:6, fontSize:10 }}>
+              <div style={{ color:"#94a3b8" }}>Mode: <span style={{ color:"#e2e8f0" }}>{voiceMode}</span></div>
+              <div style={{ color:"#94a3b8" }}>Status: <span style={{ color:"#e2e8f0" }}>{voiceStatus}</span></div>
+              <div style={{ color:"#94a3b8" }}>Level: <span style={{ color:"#e2e8f0" }}>{voiceLevel.toFixed(1)}</span></div>
+            </div>
+            <div style={{
+              maxHeight:120,
+              overflowY:"auto",
+              borderRadius:8,
+              padding:"8px 10px",
+              background:"rgba(15, 23, 42, 0.45)",
+              border:"1px solid rgba(148, 163, 184, 0.12)",
+              fontSize:10,
+              color:"#cbd5e1",
+              lineHeight:1.5,
+            }}>
+              {voiceDebugEvents.length === 0
+                ? "No native voice events received yet."
+                : voiceDebugEvents.map(entry => (
+                  <div key={entry.id}>
+                    <span style={{ color:"#67e8f9" }}>{entry.event}</span>
+                    {entry.detail ? ": " + entry.detail : ""}
+                  </div>
+                ))}
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  };
+
   // ── MOBILE layout ─────────────────────────────────────────────────────────
   if (isMobile) {
     const isSearchTab = activeTab === "search";
@@ -1347,6 +1675,11 @@ function SemanticInventory() {
 
               {!loading.search && results !== null && results.map(item => <ItemCard key={item.id} item={item} />)}
             </>
+          )}
+
+          {/* ── Voice tab ── */}
+          {activeTab === "voice" && (
+            renderVoicePanel(true)
           )}
 
           {/* ── Settings tab ── */}
@@ -1612,6 +1945,7 @@ function SemanticInventory() {
           {[
             { key: "inventory", icon: "📦", label: \`Inventory\` },
             { key: "search",    icon: "🔍", label: "Search"    },
+            { key: "voice",     icon: "🎙️", label: "Voice"     },
             { key: "settings",  icon: "⚙️", label: "Settings"  },
             { key: "add",       icon: "＋", label: "Add Item"  },
           ].map(t => (
@@ -1758,7 +2092,10 @@ function SemanticInventory() {
           <div style={d.tabs}>
             <button className={activeTab==="inventory" ? "glass-btn" : "glass-btn-secondary"} style={d.tab(activeTab==="inventory")} onClick={() => setActiveTab("inventory")}>📦 Inventory ({inventory.length})</button>
             <button className={activeTab==="search" ? "glass-btn" : "glass-btn-secondary"} style={d.tab(activeTab==="search")}    onClick={() => setActiveTab("search")}>🔍 Results {results ? \`(\${results.length})\` : ""}</button>
+            <button className={activeTab==="voice" ? "glass-btn" : "glass-btn-secondary"} style={d.tab(activeTab==="voice")} onClick={() => setActiveTab("voice")}>🎙️ Voice</button>
           </div>
+
+          {activeTab === "voice" && renderVoicePanel()}
 
           {loading.search && (
             <div style={{ display:"flex", alignItems:"center", gap:9, padding:"32px 0", justifyContent:"center", color:"#64748b", fontSize:11 }}>
@@ -1766,7 +2103,7 @@ function SemanticInventory() {
             </div>
           )}
 
-          {!loading.search && displayItems.length === 0 && (
+          {!loading.search && activeTab !== "voice" && displayItems.length === 0 && (
             <div style={{ textAlign:"center", padding:"44px 20px", color:"#475569" }}>
               <div style={{ fontSize:38, marginBottom:9 }}>{activeTab==="search" ? "🔍" : "📦"}</div>
               <div style={{ fontSize:13, color:"#64748b", marginBottom:4 }}>
@@ -1778,7 +2115,7 @@ function SemanticInventory() {
             </div>
           )}
 
-          {!loading.search && displayItems.map(item => <ItemCard key={item.id} item={item} />)}
+          {!loading.search && activeTab !== "voice" && displayItems.map(item => <ItemCard key={item.id} item={item} />)}
         </div>
       </div>
 
