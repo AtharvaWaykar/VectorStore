@@ -14,7 +14,7 @@
     },
     "ios": {
       "supportsTablet": true,
-      "bundleIdentifier": "com.anonymous.VectorStoreMobile"
+      "bundleIdentifier": "com.anonymous.vectorstore"
     },
     "android": {
       "adaptiveIcon": {

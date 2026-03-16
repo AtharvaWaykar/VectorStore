@@ -310,6 +310,57 @@ export default function App() {
     }, 500);
   };
 
+  const handleLLMRequest = async (payload) => {
+    const { requestId, text, systemPrompt } = payload;
+    const dbg = (event, detail = '') => emitVoiceDebug('llm_' + event, detail);
+    try {
+      const apiKey = process.env.EXPO_PUBLIC_GROQ_API_KEY;
+      dbg('start', apiKey ? 'key_ok' : 'NO_KEY');
+      if (!apiKey) {
+        emitToWebView({ type: 'llm/response', requestId, error: 'GROQ_API_KEY not set' });
+        return;
+      }
+      const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${apiKey}`,
+        },
+        body: JSON.stringify({
+          model: 'llama-3.1-8b-instant',
+          max_tokens: 512,
+          messages: [
+            { role: 'system', content: systemPrompt },
+            { role: 'user', content: text },
+          ],
+        }),
+      });
+      dbg('http', String(response.status));
+      const data = await response.json();
+      if (!response.ok) {
+        const errMsg = data?.error?.message || `API error ${response.status}`;
+        dbg('api_err', errMsg);
+        emitToWebView({ type: 'llm/response', requestId, error: errMsg });
+        return;
+      }
+      const raw = data?.choices?.[0]?.message?.content || '';
+      dbg('raw', raw.slice(0, 80));
+      let result;
+      try {
+        result = JSON.parse(raw);
+      } catch {
+        dbg('parse_fail', raw.slice(0, 40));
+        result = { intent: 'unknown', raw: text };
+      }
+      dbg('done', result.intent);
+      emitToWebView({ type: 'llm/response', requestId, result });
+    } catch (error) {
+      const msg = String(error?.message || error || 'unknown');
+      dbg('catch', msg);
+      emitToWebView({ type: 'llm/response', requestId, error: msg });
+    }
+  };
+
   const handleWebViewMessage = (event) => {
     let payload;
 
@@ -328,6 +379,9 @@ export default function App() {
         break;
       case 'voice/stop':
         handleVoiceStop();
+        break;
+      case 'llm/request':
+        void handleLLMRequest(payload);
         break;
       default:
         break;

@@ -250,6 +250,8 @@ window.__VECTORSTOCK_NATIVE_BRIDGE__ = window.__VECTORSTOCK_NATIVE_BRIDGE__ || {
   },
 };
 
+const _pendingLLMRequests = {};
+
 function postNativeMessage(payload) {
   if (!window.ReactNativeWebView || typeof window.ReactNativeWebView.postMessage !== "function") {
     return false;
@@ -447,14 +449,28 @@ function validateIntentResult(result, rawText, activeRoom, activeBox) {
 }
 
 async function sendToLLM(rawText, activeRoom, activeBox) {
-  // Keep prompt generation now so OpenClaw integration is a swap-in later.
-  buildIntentSystemPrompt(activeRoom, activeBox);
-
-  // Dev stub: replace this with real LLM call when backend wiring is ready.
-  return {
-    intent: "add",
-    items: [{ name: "test item", qty: 1, room: activeRoom, box: activeBox }],
-  };
+  const systemPrompt = buildIntentSystemPrompt(activeRoom, activeBox);
+  return new Promise((resolve, reject) => {
+    const requestId = String(Date.now()) + Math.random().toString(36).slice(2);
+    _pendingLLMRequests[requestId] = { resolve, reject };
+    const sent = postNativeMessage({
+      type: "llm/request",
+      requestId,
+      text: rawText,
+      systemPrompt,
+    });
+    if (!sent) {
+      delete _pendingLLMRequests[requestId];
+      reject(new Error("Native bridge unavailable"));
+      return;
+    }
+    setTimeout(() => {
+      if (_pendingLLMRequests[requestId]) {
+        delete _pendingLLMRequests[requestId];
+        reject(new Error("LLM request timed out"));
+      }
+    }, 20000);
+  });
 }
 
 // ─── IndexedDB storage ────────────────────────────────────────────────────────
@@ -683,6 +699,17 @@ function SemanticInventory() {
 
       if (payload.type === "voice/error") {
         triggerVoiceError(String(payload.message || "Voice recognition failed — please type instead."));
+        return;
+      }
+
+      if (payload.type === "llm/response") {
+        const { requestId, result, error } = payload;
+        const pending = _pendingLLMRequests[requestId];
+        if (pending) {
+          delete _pendingLLMRequests[requestId];
+          if (error) pending.reject(new Error(error));
+          else pending.resolve(result);
+        }
         return;
       }
 
