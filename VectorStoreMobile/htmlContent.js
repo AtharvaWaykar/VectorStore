@@ -300,7 +300,7 @@ const BGE_QUERY_PREFIX = 'Represent this sentence for searching relevant passage
 const DEFAULT_ROOMS = ["Garage", "Kitchen", "Bedroom", "Office", "Living Room", "Basement"];
 
 function normalizeLabel(value) {
-  return String(value ?? "").trim().replace(/\s+/g, " ");
+  return String(value ?? "").trim().replace(/\\s+/g, " ");
 }
 
 function prettyLabel(value) {
@@ -586,6 +586,8 @@ const STATUS_COLORS = {
 
 // ─── App ──────────────────────────────────────────────────────────────────────
 function SemanticInventory() {
+  const ttsSupported = typeof window !== "undefined"
+    && !!(window.speechSynthesis && window.SpeechSynthesisUtterance);
   const [inventory,    setInventory]   = useState([]);
   const [results,      setResults]     = useState(null);
   const [loading,      setLoading]     = useState({ add: false, search: false });
@@ -621,6 +623,12 @@ function SemanticInventory() {
   const [boxForm,      setBoxForm]     = useState({ room: defaultRoom, name: "" });
   const [searchQuery,  setSearchQuery] = useState("");
   const [topK,         setTopK]        = useState(5);
+  const [filterRoom,   setFilterRoom]  = useState("all");
+  const [ttsEnabled,   setTtsEnabled]  = useState(() => {
+    if (!ttsSupported) return false;
+    try { return window.localStorage.getItem("vectorstock.ttsEnabled") === "true"; }
+    catch { return false; }
+  });
   const [activeTab,    setActiveTab]   = useState("inventory");
   const [notif,        setNotif]       = useState(null);
   const [error,        setError]       = useState(null);
@@ -644,6 +652,25 @@ function SemanticInventory() {
   useEffect(() => {
     llmLoadingRef.current = llmLoading;
   }, [llmLoading]);
+
+  useEffect(() => {
+    if (!ttsSupported) return;
+    try { window.localStorage.setItem("vectorstock.ttsEnabled", String(ttsEnabled)); }
+    catch {}
+  }, [ttsEnabled, ttsSupported]);
+
+  useEffect(() => {
+    if (!ttsSupported || ttsEnabled) return;
+    try { window.speechSynthesis.cancel(); } catch {}
+  }, [ttsEnabled, ttsSupported]);
+
+  useEffect(() => {
+    if (filterRoom === "all") return;
+    const hasRoom = inventory.some(item =>
+      normalizeLabel(item.room).toLowerCase() === normalizeLabel(filterRoom).toLowerCase()
+    );
+    if (!hasRoom) setFilterRoom("all");
+  }, [filterRoom, inventory]);
 
   const triggerVoiceError = useCallback((message) => {
     setVoiceError(message);
@@ -1190,7 +1217,9 @@ function SemanticInventory() {
       const qVec = await embedQuery(q);
       qVec.__queryText = q;
       const k = Math.max(1, Math.min(topK, inventory.length));
-      setResults(searchItems(qVec, inventory, k));
+      const scored = searchItems(qVec, inventory, k);
+      setResults(scored);
+      speakTopResult(scored);
       return true;
     } catch (e) {
       setError(String(e?.message ?? e)); toast("Search failed.", "error");
@@ -1271,17 +1300,28 @@ function SemanticInventory() {
   const voiceBusy = voiceStatus === "recording" || voiceStatus === "processing" || llmLoading;
   const voiceSupportsMic = voiceMode === "native";
   const seedPct = seedProg.total > 0 ? (seedProg.done / seedProg.total) * 100 : 0;
-  const displayItems = activeTab === "search" && results !== null
-    ? results
-    : activeTab === "inventory"
-      ? inventory
-      : [];
   const knownRooms = Array.from(new Set([
     ...DEFAULT_ROOMS.map(prettyLabel),
     ...rooms.map(prettyLabel),
     ...inventory.map(i => prettyLabel(i.room)).filter(Boolean),
     prettyLabel(defaultRoom),
   ])).filter(Boolean);
+  const roomsWithItems = knownRooms.filter(room =>
+    inventory.some(item =>
+      normalizeLabel(item.room).toLowerCase() === normalizeLabel(room).toLowerCase()
+    )
+  );
+  const showRoomFilters = roomsWithItems.length > 1;
+  const filteredInventory = filterRoom === "all"
+    ? inventory
+    : inventory.filter(item =>
+        normalizeLabel(item.room).toLowerCase() === normalizeLabel(filterRoom).toLowerCase()
+      );
+  const displayItems = activeTab === "search" && results !== null
+    ? results
+    : activeTab === "inventory"
+      ? filteredInventory
+      : [];
 
   const knownBoxRecords = Array.from(new Map([
     ...boxes.map(b => ({ name: prettyLabel(b.name), room: prettyLabel(b.room) })),
@@ -1309,6 +1349,19 @@ function SemanticInventory() {
   // ── Shared sub-components ─────────────────────────────────────────────────
   const matchLabel = s => s > 0.75 ? "✦ strong" : s > 0.50 ? "· good" : "· partial";
   const matchColor = s => s > 0.75 ? "#93c5fd" : s > 0.50 ? "#a78bfa" : "#64748b";
+
+  const speakTopResult = (items) => {
+    if (!ttsSupported || !ttsEnabled || !items || !items.length) return;
+    try {
+      const item = items[0];
+      window.speechSynthesis.cancel();
+      const loc = [item.room, item.box].filter(Boolean).join(", ");
+      const utterance = new SpeechSynthesisUtterance(
+        "Your " + item.name + " is in " + (loc || "your inventory") + "."
+      );
+      window.speechSynthesis.speak(utterance);
+    } catch {}
+  };
 
   // Glass Card Component
   const ItemCard = ({ item }) => {
@@ -1669,7 +1722,30 @@ function SemanticInventory() {
                   </div>
                 </div>
               ) : (
-                inventory.map(item => <ItemCard key={item.id} item={item} />)
+                <>
+                  {showRoomFilters && (
+                    <div style={m.filterRow}>
+                      <button
+                        className={filterRoom === "all" ? "glass-btn" : "glass-btn-secondary"}
+                        style={m.filterPill(filterRoom === "all")}
+                        onClick={() => setFilterRoom("all")}
+                      >
+                        All
+                      </button>
+                      {roomsWithItems.map(room => (
+                        <button
+                          key={room}
+                          className={filterRoom === room ? "glass-btn" : "glass-btn-secondary"}
+                          style={m.filterPill(filterRoom === room)}
+                          onClick={() => setFilterRoom(room)}
+                        >
+                          {room}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                  {filteredInventory.map(item => <ItemCard key={item.id} item={item} />)}
+                </>
               )}
             </>
           )}
@@ -1744,6 +1820,20 @@ function SemanticInventory() {
                   {modelStatus}
                 </div>
               </div>
+              {ttsSupported && (
+                <>
+                  <div style={{ fontSize:12, color:"#94a3b8", lineHeight:1.7 }}>
+                    Voice Readout:
+                  </div>
+                  <button
+                    className="glass-btn-secondary"
+                    style={{ ...m.btn("secondary"), padding:"10px 12px" }}
+                    onClick={() => setTtsEnabled(v => !v)}
+                  >
+                    {ttsEnabled ? "TTS: On" : "TTS: Off"}
+                  </button>
+                </>
+              )}
               <div style={{ fontSize:12, color:"#94a3b8", lineHeight:1.7 }}>
                 Search Results (Top K):
               </div>
@@ -2120,6 +2210,18 @@ function SemanticInventory() {
               <button className="glass-btn" style={d.btn("search", busy||!inventory.length||modelStatus!=="ready")} disabled={busy||!inventory.length||modelStatus!=="ready"} onClick={handleSearch}>
                 {loading.search ? "⟳ Vectorizing…" : "⌕ Search Nearest Neighbors"}
               </button>
+              {ttsSupported && (
+                <div style={d.toggleRow}>
+                  <span style={{ fontSize:11, color:"#94a3b8" }}>Voice readout</span>
+                  <button
+                    className={ttsEnabled ? "glass-btn" : "glass-btn-secondary"}
+                    style={d.toggleBtn(ttsEnabled)}
+                    onClick={() => setTtsEnabled(v => !v)}
+                  >
+                    {ttsEnabled ? "On" : "Off"}
+                  </button>
+                </div>
+              )}
             </div>
           </div>
 
@@ -2142,6 +2244,28 @@ function SemanticInventory() {
             <button className={activeTab==="search" ? "glass-btn" : "glass-btn-secondary"} style={d.tab(activeTab==="search")}    onClick={() => setActiveTab("search")}>🔍 Results {results ? \`(\${results.length})\` : ""}</button>
             <button className={activeTab==="voice" ? "glass-btn" : "glass-btn-secondary"} style={d.tab(activeTab==="voice")} onClick={() => setActiveTab("voice")}>🎙️ Voice</button>
           </div>
+
+          {activeTab === "inventory" && showRoomFilters && (
+            <div style={d.filterRow}>
+              <button
+                className={filterRoom === "all" ? "glass-btn" : "glass-btn-secondary"}
+                style={d.filterPill(filterRoom === "all")}
+                onClick={() => setFilterRoom("all")}
+              >
+                All
+              </button>
+              {roomsWithItems.map(room => (
+                <button
+                  key={room}
+                  className={filterRoom === room ? "glass-btn" : "glass-btn-secondary"}
+                  style={d.filterPill(filterRoom === room)}
+                  onClick={() => setFilterRoom(room)}
+                >
+                  {room}
+                </button>
+              ))}
+            </div>
+          )}
 
           {activeTab === "voice" && renderVoicePanel()}
 
@@ -2206,6 +2330,13 @@ const m = {
   inp:     { width:"100%", borderRadius:8, padding:"11px 12px", color:"#e2e8f0", fontSize:TYPE.md, lineHeight:"1.35", fontFamily:INPUT_FF,
              boxSizing:"border-box", display:"block" },
   addForm: { display:"flex", flexDirection:"column", gap:10 },
+  filterRow:{ display:"flex", flexWrap:"wrap", gap:8, padding:"2px 2px 8px" },
+  filterPill:(a) => ({
+             padding:"6px 12px", borderRadius:999, border:"1px solid",
+             borderColor: a ? "rgba(34, 211, 238, 0.55)" : "rgba(148, 163, 184, 0.25)",
+             background: a ? "rgba(34, 211, 238, 0.18)" : "rgba(15, 23, 42, 0.6)",
+             color: a ? "#22d3ee" : "#94a3b8",
+             fontSize:TYPE.xs, fontFamily:FF, fontWeight:600, cursor:"pointer" }),
   secLabel:{ fontSize:TYPE.xs, letterSpacing:"1.2px", color:"#94a3b8", textTransform:"uppercase", fontWeight:600 },
   btn:     (v, d) => ({
              width:"100%", padding:"13px", borderRadius:8, border:"none", cursor: d ? "not-allowed" : "pointer",
@@ -2259,11 +2390,25 @@ const d = {
             borderColor: a ? "rgba(139, 92, 246, 0.3)" : "transparent",
             background: a ? "rgba(30, 41, 59, 0.5)" : "transparent", color: a ? "#22d3ee" : "#64748b",
             fontSize:TYPE.sm, cursor:"pointer", fontFamily:FF, fontWeight: a ? 600 : 400, marginBottom:-1 }),
+  filterRow:{ display:"flex", flexWrap:"wrap", gap:8, padding:"8px 4px 4px" },
+  filterPill:(a) => ({
+            padding:"6px 12px", borderRadius:999, border:"1px solid",
+            borderColor: a ? "rgba(34, 211, 238, 0.55)" : "rgba(148, 163, 184, 0.25)",
+            background: a ? "rgba(34, 211, 238, 0.18)" : "rgba(15, 23, 42, 0.6)",
+            color: a ? "#22d3ee" : "#94a3b8",
+            fontSize:TYPE.xs, fontFamily:FF, fontWeight:600, cursor:"pointer" }),
   card:   { borderRadius:10, padding:"12px 14px", display:"flex", gap:11, alignItems:"flex-start" },
   cName:  { fontSize:TYPE.md, fontWeight:700, color:"#f1f5f9", marginBottom:3 },
   cDesc:  { fontSize:TYPE.sm, color:"#94a3b8", marginBottom:6, lineHeight:1.55 },
   err:    { borderRadius:6, padding:"9px 12px", fontSize:TYPE.sm, color:"#f87171", lineHeight:1.5,
             background:"rgba(127, 29, 29, 0.5)", border:"1px solid rgba(248, 113, 113, 0.2)" },
+  toggleRow:{ display:"flex", alignItems:"center", justifyContent:"space-between", gap:10, paddingTop:2 },
+  toggleBtn:(a) => ({
+            padding:"5px 12px", borderRadius:999, border:"1px solid",
+            borderColor: a ? "rgba(34, 211, 238, 0.55)" : "rgba(148, 163, 184, 0.25)",
+            background: a ? "rgba(34, 211, 238, 0.18)" : "rgba(15, 23, 42, 0.6)",
+            color: a ? "#22d3ee" : "#94a3b8",
+            fontSize:TYPE.xs, fontFamily:FF, fontWeight:600, cursor:"pointer" }),
 };
 
 // ─── Tests ──────────────────────────────────────────────────────────────────────
