@@ -1085,6 +1085,41 @@ function SemanticInventory() {
       applyCommandError("Please enter an item name", origin);
       return false;
     }
+    const roomMatch = rawText.match(/^(?:add|create|new)\\s+room\\b\\s*(.*)$/i);
+    if (roomMatch) {
+      const roomName = String(roomMatch[1] || "").trim();
+      if (!roomName) {
+        applyCommandError("Please provide a room name.", origin);
+        return false;
+      }
+      const ok = addRoomByName(roomName);
+      if (ok) {
+        if (origin !== "voice") setCommandInput("");
+        if (origin === "voice") setVoiceStatus(voiceMode === "native" ? "idle" : "disabled");
+      }
+      return ok;
+    }
+    const boxMatch = rawText.match(/^(?:add|create|new)\\s+box\\b\\s*(.*)$/i);
+    if (boxMatch) {
+      const remainder = String(boxMatch[1] || "").trim();
+      if (!remainder) {
+        applyCommandError("Use: add box <name> in <room>", origin);
+        return false;
+      }
+      const roomSplit = remainder.match(/(.+?)\\s+(?:in|into|inside|within|to)\\s+(.+)/i);
+      if (!roomSplit) {
+        applyCommandError("Use: add box <name> in <room>", origin);
+        return false;
+      }
+      const boxName = roomSplit[1];
+      const boxRoom = roomSplit[2];
+      const ok = addBoxByName(boxName, boxRoom);
+      if (ok) {
+        if (origin !== "voice") setCommandInput("");
+        if (origin === "voice") setVoiceStatus(voiceMode === "native" ? "idle" : "disabled");
+      }
+      return ok;
+    }
     if (modelStatus !== "ready") {
       applyCommandError("Model still loading, please wait", origin);
       return false;
@@ -1167,26 +1202,29 @@ function SemanticInventory() {
     }
   };
 
-  const handleAddRoom = () => {
-    const roomName = prettyLabel(roomForm);
-    if (!roomName) return toast("Enter a room name.", "error");
+  const addRoomByName = (rawName) => {
+    const roomName = prettyLabel(rawName);
+    if (!roomName) { toast("Enter a room name.", "error"); return false; }
     if (rooms.some(r => normalizeLabel(r).toLowerCase() === roomName.toLowerCase())) {
-      return toast("Room already exists.", "error");
+      toast("Room already exists.", "error"); return false;
     }
     setRooms(prev => [...prev, roomName]);
-    setRoomForm("");
     setAddForm(f => ({ ...f, room: roomName, box: "" }));
     setBoxForm(f => ({ ...f, room: roomName }));
-    toast(\`Room "\${roomName}" added.\`);
+    toast("Room \"" + roomName + "\" added.");
+    return true;
   };
 
-  const handleAddBox = () => {
-    const boxName = prettyLabel(boxForm.name);
-    const boxRoom = prettyLabel(boxForm.room || defaultRoom);
-    if (!boxName) return toast("Enter a box name.", "error");
-    if (!boxRoom) return toast("Select a room for the box.", "error");
+  const addBoxByName = (rawName, rawRoom) => {
+    const boxName = prettyLabel(rawName);
+    const boxRoom = prettyLabel(rawRoom || defaultRoom);
+    if (!boxName) { toast("Enter a box name.", "error"); return false; }
+    if (!boxRoom) { toast("Select a room for the box.", "error"); return false; }
     if (!rooms.some(r => normalizeLabel(r).toLowerCase() === boxRoom.toLowerCase())) {
-      return toast("Room does not exist.", "error");
+      toast("Room does not exist.", "error"); return false;
+    }
+    if (normalizeLabel(boxName).toLowerCase() === normalizeLabel(boxRoom).toLowerCase()) {
+      toast("Box name must be different from the room name.", "error"); return false;
     }
     const duplicate = boxes.some(b =>
       normalizeLabel(b.name).toLowerCase() === boxName.toLowerCase()
@@ -1196,13 +1234,23 @@ function SemanticInventory() {
       normalizeLabel(item.box).toLowerCase() === boxName.toLowerCase()
       && normalizeLabel(item.room).toLowerCase() === boxRoom.toLowerCase()
     );
-    if (duplicate || duplicateFromItems) return toast("Box already exists in this room.", "error");
+    if (duplicate || duplicateFromItems) { toast("Box already exists in this room.", "error"); return false; }
     setBoxes(prev => [...prev, { id: crypto.randomUUID(), name: boxName, room: boxRoom }]);
-    setBoxForm(prev => ({ ...prev, name: "" }));
     if (prettyLabel(addForm.room || defaultRoom) === boxRoom) {
       setAddForm(f => ({ ...f, box: boxName }));
     }
-    toast(\`Box "\${boxName}" added to \${boxRoom}.\`);
+    toast("Box \"" + boxName + "\" added to " + boxRoom + ".");
+    return true;
+  };
+
+  const handleAddRoom = () => {
+    if (addRoomByName(roomForm)) setRoomForm("");
+  };
+
+  const handleAddBox = () => {
+    if (addBoxByName(boxForm.name, boxForm.room || defaultRoom)) {
+      setBoxForm(prev => ({ ...prev, name: "" }));
+    }
   };
 
   // ── Search ────────────────────────────────────────────────────────────────
@@ -1306,6 +1354,11 @@ function SemanticInventory() {
     ...inventory.map(i => prettyLabel(i.room)).filter(Boolean),
     prettyLabel(defaultRoom),
   ])).filter(Boolean);
+  const boxRoomLabel = prettyLabel(boxForm.room || defaultRoom);
+  const boxNameValue = normalizeLabel(boxForm.name);
+  const boxNameMatchesRoom = boxNameValue
+    && normalizeLabel(boxRoomLabel).toLowerCase() === boxNameValue.toLowerCase();
+  const canAddBox = Boolean(boxNameValue) && !boxNameMatchesRoom;
   const roomsWithItems = knownRooms.filter(room =>
     inventory.some(item =>
       normalizeLabel(item.room).toLowerCase() === normalizeLabel(room).toLowerCase()
@@ -1883,6 +1936,9 @@ function SemanticInventory() {
               <div style={{ fontSize:12, color:"#94a3b8", lineHeight:1.7 }}>
                 Add Box (assign to room):
               </div>
+              <div style={{ fontSize:11, color:"#64748b", lineHeight:1.6 }}>
+                Step 1: choose a room. Step 2: name the box.
+              </div>
               <select
                 className="glass-input"
                 style={m.inp}
@@ -1891,6 +1947,9 @@ function SemanticInventory() {
               >
                 {knownRooms.map(room => <option key={room} value={room}>{room}</option>)}
               </select>
+              <div style={{ fontSize:11, color:"#64748b", lineHeight:1.6 }}>
+                {"Adding to: " + boxRoomLabel}
+              </div>
               <div style={{ display:"flex", gap:8 }}>
                 <input
                   className="glass-input"
@@ -1901,12 +1960,18 @@ function SemanticInventory() {
                 />
                 <button
                   className="glass-btn-secondary"
-                  style={{ ...m.btn("default"), width:110, color:"#67e8f9", border:"1px solid rgba(34, 211, 238, 0.35)" }}
+                  style={{ ...m.btn("default", !canAddBox), width:110, color: canAddBox ? "#67e8f9" : "#64748b", border:"1px solid rgba(34, 211, 238, 0.35)" }}
                   onClick={handleAddBox}
+                  disabled={!canAddBox}
                 >
                   Add Box
                 </button>
               </div>
+              {boxNameMatchesRoom && (
+                <div style={{ fontSize:11, color:"#f87171", lineHeight:1.6 }}>
+                  Box name must be different from the room name.
+                </div>
+              )}
               <div style={{ fontSize:12, color:"#94a3b8", lineHeight:1.7 }}>
                 Move Box Between Rooms:
               </div>
