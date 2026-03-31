@@ -639,6 +639,9 @@ function SemanticInventory() {
   const cancelRef = useRef(false);
   const llmLoadingRef = useRef(false);
   const submitCommandRef = useRef(null);
+  const mobileContentRef = useRef(null);
+  const desktopMainRef = useRef(null);
+  const tabScrollPositionsRef = useRef({ mobile: {}, desktop: {} });
   // Refs so window.vectorStoreAPI always holds the latest closure
   const embedAndStoreRef = useRef(null);
   const handleDeleteRef  = useRef(null);
@@ -664,6 +667,22 @@ function SemanticInventory() {
     if (!ttsSupported || ttsEnabled) return;
     try { window.speechSynthesis.cancel(); } catch {}
   }, [ttsEnabled, ttsSupported]);
+
+  const handleTabContentScroll = useCallback((event) => {
+    const mode = isMobile ? "mobile" : "desktop";
+    tabScrollPositionsRef.current[mode][activeTab] = event.currentTarget.scrollTop;
+  }, [activeTab, isMobile]);
+
+  useEffect(() => {
+    const mode = isMobile ? "mobile" : "desktop";
+    const container = isMobile ? mobileContentRef.current : desktopMainRef.current;
+    if (!container) return;
+    const savedScrollTop = tabScrollPositionsRef.current[mode][activeTab] ?? 0;
+    const frame = window.requestAnimationFrame(() => {
+      if (container) container.scrollTop = savedScrollTop;
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [activeTab, isMobile]);
 
   const triggerVoiceError = useCallback((message) => {
     setVoiceError(message);
@@ -1743,7 +1762,7 @@ function SemanticInventory() {
         )}
 
         {/* Content */}
-        <div style={m.content}>
+        <div ref={mobileContentRef} style={m.content} onScroll={handleTabContentScroll}>
 
           {/* ── Inventory tab ── */}
           {activeTab === "inventory" && (
@@ -2309,7 +2328,7 @@ function SemanticInventory() {
         </div>
 
         {/* Main */}
-        <div style={d.main}>
+        <div ref={desktopMainRef} style={d.main} onScroll={handleTabContentScroll}>
           <ProgressBanner />
           <div style={d.tabs}>
             <button className={activeTab==="inventory" ? "glass-btn" : "glass-btn-secondary"} style={d.tab(activeTab==="inventory")} onClick={() => setActiveTab("inventory")}>📦 Inventory ({inventory.length})</button>
