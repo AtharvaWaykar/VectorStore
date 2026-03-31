@@ -624,6 +624,7 @@ function SemanticInventory() {
   const [searchQuery,  setSearchQuery] = useState("");
   const [topK,         setTopK]        = useState(5);
   const [filterRoom,   setFilterRoom]  = useState("all");
+  const [filterBox,    setFilterBox]   = useState("all");
   const [ttsEnabled,   setTtsEnabled]  = useState(() => {
     if (!ttsSupported) return false;
     try { return window.localStorage.getItem("vectorstock.ttsEnabled") === "true"; }
@@ -663,14 +664,6 @@ function SemanticInventory() {
     if (!ttsSupported || ttsEnabled) return;
     try { window.speechSynthesis.cancel(); } catch {}
   }, [ttsEnabled, ttsSupported]);
-
-  useEffect(() => {
-    if (filterRoom === "all") return;
-    const hasRoom = inventory.some(item =>
-      normalizeLabel(item.room).toLowerCase() === normalizeLabel(filterRoom).toLowerCase()
-    );
-    if (!hasRoom) setFilterRoom("all");
-  }, [filterRoom, inventory]);
 
   const triggerVoiceError = useCallback((message) => {
     setVoiceError(message);
@@ -1244,6 +1237,8 @@ function SemanticInventory() {
       setInventory([]);
       setResults(null);
       setSearchQuery("");
+      setFilterRoom("all");
+      setFilterBox("all");
       setActiveTab("inventory");
       toast("All saved items cleared.");
     } catch (e) {
@@ -1306,17 +1301,62 @@ function SemanticInventory() {
     ...inventory.map(i => prettyLabel(i.room)).filter(Boolean),
     prettyLabel(defaultRoom),
   ])).filter(Boolean);
-  const roomsWithItems = knownRooms.filter(room =>
-    inventory.some(item =>
-      normalizeLabel(item.room).toLowerCase() === normalizeLabel(room).toLowerCase()
+  const normalizedFilterRoom = normalizeLabel(filterRoom).toLowerCase();
+  const normalizedFilterBox = normalizeLabel(filterBox).toLowerCase();
+  const roomRecords = Array.from(inventory.reduce((map, item) => {
+    const room = prettyLabel(item.room);
+    if (!room) return map;
+    const key = normalizeLabel(room).toLowerCase();
+    const existing = map.get(key);
+    if (existing) {
+      existing.count += 1;
+    } else {
+      map.set(key, { room, count: 1 });
+    }
+    return map;
+  }, new Map()).values());
+  const roomsWithItems = roomRecords.map(record => record.room);
+  const roomCounts = roomRecords.reduce((acc, record) => {
+    acc[normalizeLabel(record.room).toLowerCase()] = record.count;
+    return acc;
+  }, {});
+  const isInventoryFilterActive = filterRoom !== "all" || filterBox !== "all";
+  const showRoomFilters = inventory.length > 0 && (roomsWithItems.length > 1 || isInventoryFilterActive);
+  const boxesInRoom = filterRoom === "all"
+    ? []
+    : Array.from(new Map(
+        inventory
+          .filter(item =>
+            normalizeLabel(item.room).toLowerCase() === normalizedFilterRoom
+          )
+          .map(item => prettyLabel(item.box))
+          .filter(Boolean)
+          .map(box => [normalizeLabel(box).toLowerCase(), box])
+      ).values());
+  const showBoxFilter = filterRoom !== "all"
+    && (boxesInRoom.length > 1 || (filterBox !== "all" && boxesInRoom.length > 0));
+  const filteredInventory = inventory
+    .filter(item =>
+      filterRoom === "all"
+      || normalizeLabel(item.room).toLowerCase() === normalizedFilterRoom
     )
-  );
-  const showRoomFilters = roomsWithItems.length > 1;
-  const filteredInventory = filterRoom === "all"
-    ? inventory
-    : inventory.filter(item =>
-        normalizeLabel(item.room).toLowerCase() === normalizeLabel(filterRoom).toLowerCase()
-      );
+    .filter(item =>
+      filterBox === "all"
+      || normalizeLabel(item.box).toLowerCase() === normalizedFilterBox
+    )
+    .sort((a, b) => {
+      const timeA = new Date(a.addedAt || 0).getTime();
+      const timeB = new Date(b.addedAt || 0).getTime();
+      return (Number.isFinite(timeB) ? timeB : 0) - (Number.isFinite(timeA) ? timeA : 0);
+    });
+  const filterSummaryLabel = [
+    filterRoom !== "all" ? prettyLabel(filterRoom) : "",
+    filterBox !== "all" ? prettyLabel(filterBox) : "",
+  ].filter(Boolean).join(" › ");
+  const handleRoomFilterSelect = (room) => {
+    setFilterRoom(room);
+    setFilterBox("all");
+  };
   const displayItems = activeTab === "search" && results !== null
     ? results
     : activeTab === "inventory"
@@ -1678,9 +1718,6 @@ function SemanticInventory() {
 
   // ── MOBILE layout ─────────────────────────────────────────────────────────
   if (isMobile) {
-    const isSearchTab = activeTab === "search";
-    const listItems   = isSearchTab && results !== null ? results : inventory;
-
     return (
       <div style={m.root}>
         {/* Glass Header */}
@@ -1728,7 +1765,7 @@ function SemanticInventory() {
                       <button
                         className={filterRoom === "all" ? "glass-btn" : "glass-btn-secondary"}
                         style={m.filterPill(filterRoom === "all")}
-                        onClick={() => setFilterRoom("all")}
+                        onClick={() => handleRoomFilterSelect("all")}
                       >
                         All
                       </button>
@@ -1737,14 +1774,49 @@ function SemanticInventory() {
                           key={room}
                           className={filterRoom === room ? "glass-btn" : "glass-btn-secondary"}
                           style={m.filterPill(filterRoom === room)}
-                          onClick={() => setFilterRoom(room)}
+                          onClick={() => handleRoomFilterSelect(room)}
                         >
-                          {room}
+                          {room} ({roomCounts[normalizeLabel(room).toLowerCase()] || 0})
                         </button>
                       ))}
                     </div>
                   )}
-                  {filteredInventory.map(item => <ItemCard key={item.id} item={item} />)}
+                  {showBoxFilter && (
+                    <div style={m.filterRow}>
+                      <button
+                        className={filterBox === "all" ? "glass-btn" : "glass-btn-secondary"}
+                        style={m.filterPill(filterBox === "all")}
+                        onClick={() => setFilterBox("all")}
+                      >
+                        All
+                      </button>
+                      {boxesInRoom.map(box => (
+                        <button
+                          key={box}
+                          className={filterBox === box ? "glass-btn" : "glass-btn-secondary"}
+                          style={m.filterPill(filterBox === box)}
+                          onClick={() => setFilterBox(box)}
+                        >
+                          {box}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                  {isInventoryFilterActive && (
+                    <div style={{ color:"#94a3b8", fontSize:12, padding:"0 2px 2px" }}>
+                      {\`Showing \${filteredInventory.length} of \${inventory.length} items · \${filterSummaryLabel}\`}
+                    </div>
+                  )}
+                  {filteredInventory.length === 0 && isInventoryFilterActive ? (
+                    <div style={m.empty}>
+                      <div style={{ fontSize:44, marginBottom:10 }}>📦</div>
+                      <div style={{ color:"#64748b", fontSize:14 }}>
+                        {\`No items in \${filterSummaryLabel}\`}
+                      </div>
+                    </div>
+                  ) : (
+                    filteredInventory.map(item => <ItemCard key={item.id} item={item} />)
+                  )}
                 </>
               )}
             </>
@@ -2250,7 +2322,7 @@ function SemanticInventory() {
               <button
                 className={filterRoom === "all" ? "glass-btn" : "glass-btn-secondary"}
                 style={d.filterPill(filterRoom === "all")}
-                onClick={() => setFilterRoom("all")}
+                onClick={() => handleRoomFilterSelect("all")}
               >
                 All
               </button>
@@ -2259,11 +2331,39 @@ function SemanticInventory() {
                   key={room}
                   className={filterRoom === room ? "glass-btn" : "glass-btn-secondary"}
                   style={d.filterPill(filterRoom === room)}
-                  onClick={() => setFilterRoom(room)}
+                  onClick={() => handleRoomFilterSelect(room)}
                 >
-                  {room}
+                  {room} ({roomCounts[normalizeLabel(room).toLowerCase()] || 0})
                 </button>
               ))}
+            </div>
+          )}
+
+          {activeTab === "inventory" && showBoxFilter && (
+            <div style={d.filterRow}>
+              <button
+                className={filterBox === "all" ? "glass-btn" : "glass-btn-secondary"}
+                style={d.filterPill(filterBox === "all")}
+                onClick={() => setFilterBox("all")}
+              >
+                All
+              </button>
+              {boxesInRoom.map(box => (
+                <button
+                  key={box}
+                  className={filterBox === box ? "glass-btn" : "glass-btn-secondary"}
+                  style={d.filterPill(filterBox === box)}
+                  onClick={() => setFilterBox(box)}
+                >
+                  {box}
+                </button>
+              ))}
+            </div>
+          )}
+
+          {activeTab === "inventory" && isInventoryFilterActive && (
+            <div style={{ color:"#94a3b8", fontSize:12, padding:"0 4px" }}>
+              {\`Showing \${filteredInventory.length} of \${inventory.length} items · \${filterSummaryLabel}\`}
             </div>
           )}
 
@@ -2282,6 +2382,7 @@ function SemanticInventory() {
                 {activeTab==="search" ? "Run a search to find nearest neighbors"
                   : seeding ? "Embedding items, please wait…"
                   : modelStatus==="loading" ? "Loading embedding model..."
+                  : activeTab==="inventory" && isInventoryFilterActive && inventory.length > 0 ? \`No items in \${filterSummaryLabel}\`
                   : "Inventory is empty"}
               </div>
             </div>
