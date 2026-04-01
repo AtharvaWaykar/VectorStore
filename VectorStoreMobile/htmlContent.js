@@ -627,6 +627,12 @@ function SemanticInventory() {
   const [modelStatus,  setModelStatus] = useState("initializing");
   const [isMobile,     setIsMobile]    = useState(window.innerWidth <= 768);
   const [boxMove,      setBoxMove]     = useState({ fromRoom: defaultRoom, box: "", toRoom: defaultRoom });
+  const [ttsEnabled,   setTtsEnabled]  = useState(() => {
+    try { return window.localStorage.getItem("vectorstock.ttsEnabled") === "true"; }
+    catch { return false; }
+  });
+  const [clearRoomTarget, setClearRoomTarget] = useState("");
+  const [pendingDeleteId, setPendingDeleteId] = useState(null);
   const cancelRef = useRef(false);
   const llmLoadingRef = useRef(false);
   const submitCommandRef = useRef(null);
@@ -644,6 +650,11 @@ function SemanticInventory() {
   useEffect(() => {
     llmLoadingRef.current = llmLoading;
   }, [llmLoading]);
+
+  useEffect(() => {
+    try { window.localStorage.setItem("vectorstock.ttsEnabled", ttsEnabled); }
+    catch {}
+  }, [ttsEnabled]);
 
   const triggerVoiceError = useCallback((message) => {
     setVoiceError(message);
@@ -1179,6 +1190,17 @@ function SemanticInventory() {
   };
 
   // ── Search ────────────────────────────────────────────────────────────────
+  function speakTopResult(results) {
+    if (!ttsEnabled || !results.length || !window.speechSynthesis) return;
+    const item = results[0];
+    window.speechSynthesis.cancel();
+    const loc = [item.room, item.box].filter(Boolean).join(", ");
+    const utterance = new SpeechSynthesisUtterance(
+      \`Your \${item.name} is in \${loc || "your inventory"}.\`
+    );
+    window.speechSynthesis.speak(utterance);
+  }
+
   const handleSearch = async (queryOverride = null) => {
     const q = String(queryOverride ?? searchQuery ?? "").trim();
     if (!q) return toast("Enter a search query.", "error");
@@ -1190,7 +1212,9 @@ function SemanticInventory() {
       const qVec = await embedQuery(q);
       qVec.__queryText = q;
       const k = Math.max(1, Math.min(topK, inventory.length));
-      setResults(searchItems(qVec, inventory, k));
+      const scored = searchItems(qVec, inventory, k);
+      setResults(scored);
+      speakTopResult(scored);
       return true;
     } catch (e) {
       setError(String(e?.message ?? e)); toast("Search failed.", "error");
@@ -1220,6 +1244,30 @@ function SemanticInventory() {
     } catch (e) {
       setError(\`Clear failed: \${String(e?.message ?? e)}\`);
       toast("Clear failed.", "error");
+    }
+  };
+
+  const handleClearRoom = async () => {
+    const target = prettyLabel(clearRoomTarget);
+    if (!target) return toast("Select a room to clear.", "error");
+
+    const toDelete = inventory.filter(item =>
+      normalizeLabel(item.room).toLowerCase() === normalizeLabel(target).toLowerCase()
+    );
+    if (!toDelete.length) return toast(\`No items in \${target}.\`, "error");
+
+    try {
+      await Promise.all(toDelete.map(item => deleteItem(item.id)));
+      setInventory(prev => prev.filter(item =>
+        normalizeLabel(item.room).toLowerCase() !== normalizeLabel(target).toLowerCase()
+      ));
+      setResults(prev => prev ? prev.filter(item =>
+        normalizeLabel(item.room).toLowerCase() !== normalizeLabel(target).toLowerCase()
+      ) : prev);
+      setClearRoomTarget("");
+      toast(\`Cleared \${toDelete.length} items from \${target}.\`);
+    } catch (e) {
+      toast(\`Clear failed: \${e.message}\`, "error");
     }
   };
 
@@ -1365,15 +1413,27 @@ function SemanticInventory() {
         </div>
         <button
           style={{
-            background:"rgba(30, 41, 59, 0.3)", border:"1px solid rgba(148, 163, 184, 0.1)",
-            color:"#64748b", cursor:"pointer", fontSize: isMobile ? 20 : 14,
-            padding:"6px 8px", flexShrink:0, lineHeight:1, borderRadius:6,
-            transition:"all 0.15s ease"
+            background: pendingDeleteId === item.id ? "rgba(248, 113, 113, 0.2)" : "rgba(30, 41, 59, 0.3)",
+            border: pendingDeleteId === item.id ? "1px solid rgba(248, 113, 113, 0.5)" : "1px solid rgba(148, 163, 184, 0.1)",
+            color: pendingDeleteId === item.id ? "#f87171" : "#64748b",
+            cursor:"pointer", fontSize: isMobile ? 20 : 14,
+            padding: pendingDeleteId === item.id ? "6px 10px" : "6px 8px",
+            flexShrink:0, lineHeight:1, borderRadius:6,
+            transition:"all 0.15s ease",
+            whiteSpace:"nowrap"
           }}
-          onClick={() => handleDelete(item.id)}
-          onMouseEnter={e => { e.currentTarget.style.color="#f87171"; e.currentTarget.style.background="rgba(248, 113, 113, 0.15)"; }}
-          onMouseLeave={e => { e.currentTarget.style.color="#64748b"; e.currentTarget.style.background="rgba(30, 41, 59, 0.3)"; }}
-        >✕</button>
+          onClick={() => {
+            if (pendingDeleteId === item.id) {
+              handleDelete(item.id);
+              setPendingDeleteId(null);
+            } else {
+              setPendingDeleteId(item.id);
+              window.setTimeout(() => setPendingDeleteId(p => p === item.id ? null : p), 3000);
+            }
+          }}
+          onMouseEnter={e => { if (pendingDeleteId !== item.id) { e.currentTarget.style.color="#f87171"; e.currentTarget.style.background="rgba(248, 113, 113, 0.15)"; }}}
+          onMouseLeave={e => { if (pendingDeleteId !== item.id) { e.currentTarget.style.color="#64748b"; e.currentTarget.style.background="rgba(30, 41, 59, 0.3)"; }}}
+        >{pendingDeleteId === item.id ? "Tap again to delete" : "✕"}</button>
       </div>
     );
   };
@@ -1877,6 +1937,40 @@ function SemanticInventory() {
               >
                 Clear All Stored Items
               </button>
+              {window.speechSynthesis && (
+                <>
+                  <div style={{ fontSize:12, color:"#94a3b8", lineHeight:1.7 }}>Voice Output:</div>
+                  <button
+                    className={ttsEnabled ? "glass-btn" : "glass-btn-secondary"}
+                    style={{
+                      ...m.btn("default"),
+                      color: ttsEnabled ? "#22d3ee" : "#64748b",
+                      border: ttsEnabled ? "1px solid rgba(34, 211, 238, 0.35)" : "1px solid rgba(148, 163, 184, 0.2)"
+                    }}
+                    onClick={() => setTtsEnabled(v => !v)}
+                  >
+                    {ttsEnabled ? "🔊 Read top result aloud: On" : "🔇 Read top result aloud: Off"}
+                  </button>
+                </>
+              )}
+              <div style={{ fontSize:12, color:"#94a3b8", lineHeight:1.7 }}>Clear Room:</div>
+              <select
+                className="glass-input"
+                style={m.inp}
+                value={clearRoomTarget}
+                onChange={e => setClearRoomTarget(e.target.value)}
+              >
+                <option value="">Select room</option>
+                {knownRooms.map(room => <option key={room} value={room}>{room}</option>)}
+              </select>
+              <button
+                className="glass-btn-secondary"
+                style={{ ...m.btn("default"), color:"#f87171", border:"1px solid rgba(248, 113, 113, 0.35)", opacity: clearRoomTarget ? 1 : 0.45, cursor: clearRoomTarget ? "pointer" : "not-allowed" }}
+                onClick={handleClearRoom}
+                disabled={!clearRoomTarget}
+              >
+                Clear Room
+              </button>
             </div>
           )}
 
@@ -2128,7 +2222,38 @@ function SemanticInventory() {
               <br /><span style={{ opacity:0.6, cursor:"pointer" }} onClick={() => setError(null)}>dismiss ×</span>
             </div>
           )}
-          <div style={{ marginTop:"auto", fontSize:10, color:"#475569", lineHeight:1.7 }}>
+          <div style={{ borderTop:"1px solid rgba(148, 163, 184, 0.1)", paddingTop:12, display:"flex", flexDirection:"column", gap:8 }}>
+            <div style={{ fontSize:11, color:"#94a3b8", letterSpacing:"0.5px" }}>SETTINGS</div>
+            {window.speechSynthesis && (
+              <button
+                className={ttsEnabled ? "glass-btn" : "glass-btn-secondary"}
+                style={{ ...d.btn("default", false), fontSize:11, padding:"7px 10px", color: ttsEnabled ? "#22d3ee" : "#64748b", border: ttsEnabled ? "1px solid rgba(34, 211, 238, 0.35)" : "1px solid rgba(148, 163, 184, 0.2)" }}
+                onClick={() => setTtsEnabled(v => !v)}
+              >
+                {ttsEnabled ? "🔊 Read top result aloud: On" : "🔇 Read top result aloud: Off"}
+              </button>
+            )}
+            <div style={{ display:"flex", gap:6 }}>
+              <select
+                className="glass-input"
+                style={{ ...d.sel, flex:1 }}
+                value={clearRoomTarget}
+                onChange={e => setClearRoomTarget(e.target.value)}
+              >
+                <option value="">Select room to clear</option>
+                {knownRooms.map(room => <option key={room} value={room}>{room}</option>)}
+              </select>
+              <button
+                className="glass-btn-secondary"
+                style={{ ...d.btn("default", !clearRoomTarget), fontSize:11, padding:"7px 10px", color:"#f87171", border:"1px solid rgba(248, 113, 113, 0.35)" }}
+                onClick={handleClearRoom}
+                disabled={!clearRoomTarget}
+              >
+                Clear Room
+              </button>
+            </div>
+          </div>
+          <div style={{ fontSize:10, color:"#475569", lineHeight:1.7 }}>
             Embeddings via Transformers.js (bge-small-en-v1.5) · local, in-browser.<br />
             No exact names needed — concepts cluster in vector space.
           </div>
