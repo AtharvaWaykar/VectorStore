@@ -699,6 +699,7 @@ function SemanticInventory() {
   const [cameraMode,    setCameraMode]    = useState(window.ReactNativeWebView ? "checking" : "browser");
   const [cameraAvailable, setCameraAvailable] = useState(!window.ReactNativeWebView);
   const [clearRoomTarget, setClearRoomTarget] = useState("");
+  const [importMode,     setImportMode]     = useState("merge");
   const [pendingDeleteId, setPendingDeleteId] = useState(null);
   const [reviewItems,     setReviewItems]     = useState([]);
   const cancelRef = useRef(false);
@@ -1490,6 +1491,107 @@ function SemanticInventory() {
       setError(\`Clear failed: \${String(e?.message ?? e)}\`);
       toast("Clear failed.", "error");
     }
+  };
+
+  const handleExport = async () => {
+    try {
+      const items = await getAllItems();
+      if (!items.length) return toast("Nothing to export — inventory is empty.", "error");
+
+      const exportData = items.map(({ vector, ...rest }) => rest);
+      const payload = {
+        version: 1,
+        exportedAt: new Date().toISOString(),
+        items: exportData,
+      };
+      const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+
+      try {
+        const anchor = document.createElement("a");
+        anchor.href = url;
+        anchor.download = \`homefind-backup-\${new Date().toISOString().slice(0, 10)}.json\`;
+        document.body.appendChild(anchor);
+        anchor.click();
+        anchor.remove();
+      } finally {
+        URL.revokeObjectURL(url);
+      }
+
+      toast(\`Exported \${items.length} items ✓\`);
+    } catch (e) {
+      toast(\`Export failed: \${String(e?.message ?? e)}\`, "error");
+    }
+  };
+
+  const handleImport = async (file, mode = "merge") => {
+    if (modelStatus !== "ready") return toast("Model not ready.", "error");
+
+    try {
+      const text = await file.text();
+      const parsed = JSON.parse(text);
+      if (!parsed || !Array.isArray(parsed.items)) {
+        return toast("Invalid backup file.", "error");
+      }
+
+      const validItems = parsed.items.filter(item =>
+        item && typeof item === "object" && normalizeLabel(item.name)
+      );
+      if (!validItems.length) return toast("No valid items found in file.", "error");
+
+      if (mode === "replace") {
+        await clearAll();
+        setInventory([]);
+        setResults(null);
+        setFilterRoom("all");
+        setFilterBox("all");
+      }
+
+      setSeeding(true);
+      setSeedProg({ done: 0, total: validItems.length, current: "" });
+      const imported = [];
+
+      for (let i = 0; i < validItems.length; i++) {
+        const item = validItems[i];
+        const label = normalizeLabel(item.name);
+        setSeedProg({ done: i, total: validItems.length, current: label });
+        try {
+          const stored = await embedAndStoreItem({
+            name: item.name,
+            qty: item.qty || "",
+            room: item.room || "Unassigned",
+            box: item.box || "",
+            source: "import",
+          });
+          imported.push(stored);
+        } catch (e) {
+          // Skip failed item and continue importing the rest.
+        } finally {
+          setSeedProg({ done: i + 1, total: validItems.length, current: label });
+        }
+      }
+
+      const persisted = await getAllItems();
+      setInventory(persisted.map(item => ({
+        ...item,
+        room: item.room || "Unassigned",
+        box: item.box || "",
+      })));
+      setResults(null);
+      toast(\`Imported \${imported.length} of \${validItems.length} items ✓\`);
+    } catch (e) {
+      toast(\`Import failed: \${String(e?.message ?? e)}\`, "error");
+    } finally {
+      setSeeding(false);
+    }
+  };
+
+  const handleImportFileSelect = (event) => {
+    const file = event.target.files?.[0];
+    if (file) {
+      void handleImport(file, importMode);
+    }
+    event.target.value = "";
   };
 
   const handleClearRoom = async () => {
@@ -2695,6 +2797,54 @@ function SemanticInventory() {
               >
                 Clear All Stored Items
               </button>
+              <button
+                className="glass-btn-secondary"
+                style={{ ...m.btn("default"), color:"#67e8f9", border:"1px solid rgba(34, 211, 238, 0.35)" }}
+                onClick={handleExport}
+              >
+                Export Inventory
+              </button>
+              <div style={{ fontSize:12, color:"#94a3b8", lineHeight:1.7 }}>
+                Merge or Replace:
+              </div>
+              <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:8 }}>
+                <button
+                  className={importMode === "merge" ? "glass-btn" : "glass-btn-secondary"}
+                  style={{ ...m.btn("default"), color: importMode === "merge" ? "#e2e8f0" : "#94a3b8" }}
+                  onClick={() => setImportMode("merge")}
+                >
+                  Merge
+                </button>
+                <button
+                  className={importMode === "replace" ? "glass-btn" : "glass-btn-secondary"}
+                  style={{ ...m.btn("default"), color: importMode === "replace" ? "#e2e8f0" : "#94a3b8" }}
+                  onClick={() => setImportMode("replace")}
+                >
+                  Replace
+                </button>
+              </div>
+              <label
+                className="glass-btn-secondary"
+                style={{
+                  ...m.btn("default"),
+                  display:"flex",
+                  alignItems:"center",
+                  justifyContent:"center",
+                  color:"#67e8f9",
+                  border:"1px solid rgba(34, 211, 238, 0.35)",
+                  opacity: seeding ? 0.45 : 1,
+                  cursor: seeding ? "not-allowed" : "pointer",
+                }}
+              >
+                <input
+                  type="file"
+                  accept=".json,application/json"
+                  style={{ display:"none" }}
+                  disabled={seeding}
+                  onChange={handleImportFileSelect}
+                />
+                Import from Backup
+              </label>
               {window.speechSynthesis && (
                 <>
                   <div style={{ fontSize:12, color:"#94a3b8", lineHeight:1.7 }}>Voice Output:</div>
@@ -3023,6 +3173,53 @@ function SemanticInventory() {
                 Clear Room
               </button>
             </div>
+            <button
+              className="glass-btn-secondary"
+              style={{ ...d.btn("default", false), fontSize:11, padding:"7px 10px", color:"#67e8f9", border:"1px solid rgba(34, 211, 238, 0.35)" }}
+              onClick={handleExport}
+            >
+              Export Inventory
+            </button>
+            <div style={{ fontSize:11, color:"#94a3b8" }}>Merge or Replace:</div>
+            <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:6 }}>
+              <button
+                className={importMode === "merge" ? "glass-btn" : "glass-btn-secondary"}
+                style={{ ...d.btn("default", false), fontSize:11, padding:"7px 10px", color: importMode === "merge" ? "#e2e8f0" : "#94a3b8" }}
+                onClick={() => setImportMode("merge")}
+              >
+                Merge
+              </button>
+              <button
+                className={importMode === "replace" ? "glass-btn" : "glass-btn-secondary"}
+                style={{ ...d.btn("default", false), fontSize:11, padding:"7px 10px", color: importMode === "replace" ? "#e2e8f0" : "#94a3b8" }}
+                onClick={() => setImportMode("replace")}
+              >
+                Replace
+              </button>
+            </div>
+            <label
+              className="glass-btn-secondary"
+              style={{
+                ...d.btn("default", seeding),
+                fontSize:11,
+                padding:"7px 10px",
+                color:"#67e8f9",
+                border:"1px solid rgba(34, 211, 238, 0.35)",
+                display:"flex",
+                alignItems:"center",
+                justifyContent:"center",
+                cursor: seeding ? "not-allowed" : "pointer",
+              }}
+            >
+              <input
+                type="file"
+                accept=".json,application/json"
+                style={{ display:"none" }}
+                disabled={seeding}
+                onChange={handleImportFileSelect}
+              />
+              Import from Backup
+            </label>
           </div>
           <div style={{ fontSize:10, color:"#475569", lineHeight:1.7 }}>
             Embeddings via Transformers.js (bge-small-en-v1.5) · local, in-browser.<br />
