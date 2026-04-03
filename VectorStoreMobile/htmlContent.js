@@ -298,6 +298,11 @@ const loadQueue = [];
 const EMBEDDING_MODEL = 'Xenova/bge-small-en-v1.5';
 const BGE_QUERY_PREFIX = 'Represent this sentence for searching relevant passages: ';
 const DEFAULT_ROOMS = ["Garage", "Kitchen", "Bedroom", "Office", "Living Room", "Basement"];
+const CAMERA_PERMISSION_DENIED = "Camera access denied. Allow camera access in browser settings.";
+const CAMERA_NOT_FOUND = "No camera found on this device.";
+const CAMERA_NO_ITEMS = "No items detected — try retaking the photo.";
+const CAMERA_DETECTION_FAILED = "Detection failed — please try again.";
+const CAMERA_NATIVE_UNSUPPORTED = "Camera scanning requires a rebuilt development build. Expo Go will not prompt for WebView camera access.";
 
 function normalizeLabel(value) {
   return String(value ?? "").trim().replace(/\\s+/g, " ");
@@ -305,6 +310,17 @@ function normalizeLabel(value) {
 
 function prettyLabel(value) {
   return normalizeLabel(value).replace(/\b\w/g, c => c.toUpperCase());
+}
+
+function getDetectItemsAdapter() {
+  return typeof window.detectItems === "function" ? window.detectItems : null;
+}
+
+function getReviewAdapter() {
+  if (!window.vectorStoreReview || typeof window.vectorStoreReview.openWithItems !== "function") {
+    return null;
+  }
+  return window.vectorStoreReview;
 }
 
 function readJSONStorage(key, fallback) {
@@ -636,10 +652,14 @@ function SemanticInventory() {
   const [modelStatus,  setModelStatus] = useState("initializing");
   const [isMobile,     setIsMobile]    = useState(window.innerWidth <= 768);
   const [boxMove,      setBoxMove]     = useState({ fromRoom: defaultRoom, box: "", toRoom: defaultRoom });
-  const [ttsEnabled,   setTtsEnabled]  = useState(() => {
-    try { return window.localStorage.getItem("vectorstock.ttsEnabled") === "true"; }
-    catch { return false; }
-  });
+  const [cameraRoom,   setCameraRoom]   = useState(defaultRoom);
+  const [cameraBox,    setCameraBox]    = useState("");
+  const [cameraStream, setCameraStream] = useState(null);
+  const [cameraCapture, setCameraCapture] = useState(null);
+  const [cameraLoading, setCameraLoading] = useState(false);
+  const [cameraError,   setCameraError]   = useState(null);
+  const [cameraMode,    setCameraMode]    = useState(window.ReactNativeWebView ? "checking" : "browser");
+  const [cameraAvailable, setCameraAvailable] = useState(!window.ReactNativeWebView);
   const [clearRoomTarget, setClearRoomTarget] = useState("");
   const [pendingDeleteId, setPendingDeleteId] = useState(null);
   const cancelRef = useRef(false);
@@ -648,10 +668,18 @@ function SemanticInventory() {
   const mobileContentRef = useRef(null);
   const desktopMainRef = useRef(null);
   const tabScrollPositionsRef = useRef({ mobile: {}, desktop: {} });
+  const videoRef = useRef(null);
   // Refs so window.vectorStoreAPI always holds the latest closure
   const embedAndStoreRef = useRef(null);
   const handleDeleteRef  = useRef(null);
   const seedRef          = useRef(null);
+  const stopCameraStream = useCallback((stream = cameraStream) => {
+    if (!stream || typeof stream.getTracks !== "function") return;
+    stream.getTracks().forEach(track => {
+      try { track.stop(); } catch {}
+    });
+    setCameraStream(current => current === stream ? null : current);
+  }, [cameraStream]);
 
   useEffect(() => {
     const handler = () => setIsMobile(window.innerWidth <= 768);
@@ -714,6 +742,13 @@ function SemanticInventory() {
         setVoiceMode(nextMode);
         setVoiceStatus(nextMode === "native" ? "idle" : "disabled");
         if (nextMode !== "native") setVoiceLevel(-2);
+        return;
+      }
+
+      if (payload.type === "camera/capabilities") {
+        const nextAvailable = Boolean(payload.cameraAvailable);
+        setCameraAvailable(nextAvailable);
+        setCameraMode(nextAvailable ? String(payload.mode || "native-webview") : "disabled");
         return;
       }
 
@@ -782,6 +817,7 @@ function SemanticInventory() {
     window.__VECTORSTOCK_NATIVE_QUEUE__ = [];
     pending.forEach(handleNativePayload);
     postNativeMessage({ type: "voice/check-support" });
+    postNativeMessage({ type: "camera/check-support" });
 
     return () => {
       window.__VECTORSTOCK_NATIVE_BRIDGE__.receive = fallbackReceiver;
@@ -820,7 +856,27 @@ function SemanticInventory() {
       fromRoom: rooms.includes(m.fromRoom) ? m.fromRoom : rooms[0],
       toRoom: rooms.includes(m.toRoom) ? m.toRoom : rooms[0],
     }));
+    setCameraRoom(current => rooms.includes(current) ? current : rooms[0]);
   }, [rooms, defaultRoom, addForm.room]);
+
+  useEffect(() => {
+    if (!videoRef.current) return;
+    if (cameraStream) {
+      videoRef.current.srcObject = cameraStream;
+      videoRef.current.play?.().catch(() => {});
+      return;
+    }
+    videoRef.current.srcObject = null;
+  }, [cameraStream]);
+
+  useEffect(() => {
+    if (activeTab === "camera") return;
+    stopCameraStream();
+  }, [activeTab, stopCameraStream]);
+
+  useEffect(() => () => {
+    stopCameraStream();
+  }, [stopCameraStream]);
 
   // ── Initialize model ──────────────────────────────────────────────────────
   useEffect(() => {
@@ -1437,6 +1493,10 @@ function SemanticInventory() {
     .filter(b => normalizeLabel(b.room).toLowerCase() === normalizeLabel(addForm.room || defaultRoom).toLowerCase())
     .map(b => b.name);
 
+  const cameraBoxes = knownBoxRecords
+    .filter(b => normalizeLabel(b.room).toLowerCase() === normalizeLabel(cameraRoom || defaultRoom).toLowerCase())
+    .map(b => b.name);
+
   const moveBoxes = knownBoxRecords
     .filter(b => normalizeLabel(b.room).toLowerCase() === normalizeLabel(boxMove.fromRoom || defaultRoom).toLowerCase())
     .map(b => b.name);
@@ -1446,22 +1506,138 @@ function SemanticInventory() {
     ? ('Move "' + prettyLabel(boxMove.box) + '" from ' + prettyLabel(boxMove.fromRoom) + ' to ' + prettyLabel(boxMove.toRoom))
     : "Pick source room, box, and destination room";
 
+  useEffect(() => {
+    if (!cameraBox) return;
+    const stillExists = cameraBoxes.some(box =>
+      normalizeLabel(box).toLowerCase() === normalizeLabel(cameraBox).toLowerCase()
+    );
+    if (!stillExists) setCameraBox("");
+  }, [cameraBoxes, cameraBox]);
+
+  const handleOpenCamera = async () => {
+    setCameraError(null);
+    setCameraCapture(null);
+    stopCameraStream();
+
+    if (window.ReactNativeWebView && !cameraAvailable) {
+      setCameraError(CAMERA_NATIVE_UNSUPPORTED);
+      return;
+    }
+
+    if (!window.ReactNativeWebView && window.isSecureContext === false) {
+      setCameraError("Camera is only available on HTTPS or localhost.");
+      return;
+    }
+
+    if (!navigator.mediaDevices || typeof navigator.mediaDevices.getUserMedia !== "function") {
+      setCameraError("Camera is not supported in this browser.");
+      return;
+    }
+
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: "environment" },
+        audio: false,
+      });
+      setCameraStream(stream);
+    } catch (e) {
+      if (e?.name === "NotAllowedError" || e?.name === "PermissionDeniedError") {
+        setCameraError(CAMERA_PERMISSION_DENIED);
+      } else if (e?.name === "NotFoundError" || e?.name === "DevicesNotFoundError") {
+        setCameraError(CAMERA_NOT_FOUND);
+      } else {
+        setCameraError(\`Camera error: \${e?.message || "Unable to access camera."}\`);
+      }
+    }
+  };
+
+  const handleDetect = async (base64) => {
+    const detectItems = getDetectItemsAdapter();
+    if (!detectItems) {
+      setCameraError("Camera detection is not available yet.");
+      setCameraCapture(null);
+      return;
+    }
+
+    const reviewApi = getReviewAdapter();
+    if (!reviewApi) {
+      setCameraError("Review screen is not available yet.");
+      setCameraCapture(null);
+      return;
+    }
+
+    setCameraLoading(true);
+    setCameraError(null);
+    try {
+      const detected = await detectItems(base64, cameraRoom, cameraBox);
+      if (!Array.isArray(detected) || !detected.length) {
+        setCameraError(CAMERA_NO_ITEMS);
+        setCameraCapture(null);
+        return;
+      }
+
+      const reviewItems = detected
+        .map(item => {
+          const name = normalizeLabel(item?.name);
+          if (!name) return null;
+          return {
+            id: crypto.randomUUID(),
+            name,
+            qty: String(item?.qty ?? 1),
+            room: prettyLabel(cameraRoom || defaultRoom || "Unassigned"),
+            box: prettyLabel(cameraBox || ""),
+          };
+        })
+        .filter(Boolean);
+
+      if (!reviewItems.length) {
+        setCameraError(CAMERA_NO_ITEMS);
+        setCameraCapture(null);
+        return;
+      }
+
+      reviewApi.openWithItems(reviewItems);
+      setActiveTab("review");
+    } catch (e) {
+      setCameraError(
+        e?.message === "Camera detection is not available yet." || e?.message === "Review screen is not available yet."
+          ? e.message
+          : CAMERA_DETECTION_FAILED
+      );
+      setCameraCapture(null);
+    } finally {
+      setCameraLoading(false);
+    }
+  };
+
+  const handleCapture = () => {
+    if (!videoRef.current) return;
+    if (!videoRef.current.videoWidth || !videoRef.current.videoHeight) {
+      setCameraError("Camera preview is not ready yet.");
+      return;
+    }
+
+    const canvas = document.createElement("canvas");
+    canvas.width = videoRef.current.videoWidth;
+    canvas.height = videoRef.current.videoHeight;
+    canvas.getContext("2d").drawImage(videoRef.current, 0, 0);
+
+    stopCameraStream();
+
+    const base64 = canvas.toDataURL("image/jpeg", 0.85).split(",")[1];
+    setCameraCapture(base64);
+    void handleDetect(base64);
+  };
+
+  const handleRetake = () => {
+    setCameraCapture(null);
+    setCameraError(null);
+    void handleOpenCamera();
+  };
+
   // ── Shared sub-components ─────────────────────────────────────────────────
   const matchLabel = s => s > 0.75 ? "✦ strong" : s > 0.50 ? "· good" : "· partial";
   const matchColor = s => s > 0.75 ? "#93c5fd" : s > 0.50 ? "#a78bfa" : "#64748b";
-
-  const speakTopResult = (items) => {
-    if (!ttsSupported || !ttsEnabled || !items || !items.length) return;
-    try {
-      const item = items[0];
-      window.speechSynthesis.cancel();
-      const loc = [item.room, item.box].filter(Boolean).join(", ");
-      const utterance = new SpeechSynthesisUtterance(
-        "Your " + item.name + " is in " + (loc || "your inventory") + "."
-      );
-      window.speechSynthesis.speak(utterance);
-    } catch {}
-  };
 
   // Glass Card Component
   const ItemCard = ({ item }) => {
@@ -1788,6 +1964,148 @@ function SemanticInventory() {
     );
   };
 
+  const renderCameraPanel = (compact = false) => {
+    const canCapture = Boolean(cameraStream) && !cameraLoading;
+    const cameraReady = cameraAvailable && cameraMode !== "checking";
+    const previewStyle = compact ? m.cameraPreview : d.cameraPreview;
+    const selectStyle = compact ? m.inp : d.sel;
+    const buttonStyle = compact ? m.btn : d.btn;
+    const panelStyle = compact ? m.addForm : { ...d.form, gap:12, maxWidth:760 };
+    const cameraStatusLabel = cameraMode === "checking"
+      ? "Checking camera support..."
+      : cameraAvailable
+        ? "Open the camera, capture an image, then send it to CV."
+        : "This build cannot grant WebView camera access.";
+    const cameraSupportHint = cameraAvailable
+      ? "Use a physical device or simulator with camera support enabled."
+      : "Rebuild the native app after permission changes. Expo Go will not show the WebView camera permission prompt.";
+
+    return (
+      <div className="glass" style={panelStyle}>
+        <div style={compact ? m.secLabel : d.secLbl}>CAMERA SCAN</div>
+        <div className="glass-card" style={{
+          borderRadius:12,
+          padding: compact ? 14 : 16,
+          display:"flex",
+          flexDirection:"column",
+          gap:12,
+          minHeight: compact ? "calc(100vh - 260px)" : 560,
+        }}>
+          <div style={compact ? m.cameraGrid : d.cameraGrid}>
+            <select
+              className="glass-input"
+              style={selectStyle}
+              value={cameraRoom}
+              onChange={e => {
+                setCameraRoom(prettyLabel(e.target.value));
+                setCameraBox("");
+              }}
+              disabled={cameraLoading}
+            >
+              {knownRooms.map(room => <option key={room} value={room}>{room}</option>)}
+            </select>
+            <select
+              className="glass-input"
+              style={selectStyle}
+              value={cameraBox}
+              onChange={e => setCameraBox(e.target.value)}
+              disabled={cameraLoading}
+            >
+              <option value="">No box</option>
+              {cameraBoxes.map(box => <option key={box} value={box}>{box}</option>)}
+            </select>
+          </div>
+
+          <div style={{ display:"flex", flexDirection:"column", gap:4 }}>
+            <div style={{ fontSize:13, color:"#e2e8f0" }}>{cameraStatusLabel}</div>
+            <div style={{ fontSize:11, color: cameraAvailable ? "#67e8f9" : "#94a3b8", lineHeight:1.5 }}>
+              {cameraSupportHint}
+            </div>
+          </div>
+
+          {!cameraCapture && (
+            <button
+              className="glass-btn"
+              style={buttonStyle("primary", cameraLoading || !cameraReady)}
+              onClick={handleOpenCamera}
+              disabled={cameraLoading || !cameraReady}
+            >
+              Open Camera
+            </button>
+          )}
+
+          <div style={previewStyle}>
+            {!cameraCapture ? (
+              cameraStream ? (
+                <video
+                  ref={videoRef}
+                  playsInline
+                  muted
+                  autoPlay
+                  style={compact ? m.cameraMedia : d.cameraMedia}
+                />
+              ) : (
+                <div style={compact ? m.cameraPlaceholder : d.cameraPlaceholder}>
+                  Room and box labels are applied to every detected item from this scan.
+                </div>
+              )
+            ) : (
+              <img
+                src={\`data:image/jpeg;base64,\${cameraCapture}\`}
+                alt="Captured inventory preview"
+                style={compact ? m.cameraMedia : d.cameraMedia}
+              />
+            )}
+          </div>
+
+          {!cameraCapture && cameraStream && (
+            <button
+              className="glass-btn glow-cyan"
+              style={buttonStyle("primary", !canCapture)}
+              onClick={handleCapture}
+              disabled={!canCapture}
+            >
+              Capture
+            </button>
+          )}
+
+          {cameraCapture && (
+            <div style={compact ? m.cameraActionRow : d.cameraActionRow}>
+              <button
+                className="glass-btn-secondary"
+                style={{ ...(compact ? m.cameraActionBtn : d.cameraActionBtn), ...buttonStyle("default", cameraLoading) }}
+                onClick={handleRetake}
+                disabled={cameraLoading}
+              >
+                Retake
+              </button>
+              {cameraLoading && (
+                <div style={compact ? m.cameraLoading : d.cameraLoading}>
+                  <div className="spin" />
+                  <span>Sending to CV API...</span>
+                </div>
+              )}
+            </div>
+          )}
+
+          {cameraError && (
+            <div className="glass" style={compact ? m.cameraError : d.cameraError}>
+              <span>{cameraError}</span>
+              <button
+                className="glass-btn-secondary"
+                style={compact ? m.cameraInlineBtn : d.cameraInlineBtn}
+                onClick={handleRetake}
+                disabled={cameraLoading}
+              >
+                Retake
+              </button>
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  };
+
   // ── MOBILE layout ─────────────────────────────────────────────────────────
   if (isMobile) {
     return (
@@ -1948,6 +2266,11 @@ function SemanticInventory() {
           {/* ── Voice tab ── */}
           {activeTab === "voice" && (
             renderVoicePanel(true)
+          )}
+
+          {/* ── Camera tab ── */}
+          {activeTab === "camera" && (
+            renderCameraPanel(true)
           )}
 
           {/* ── Settings tab ── */}
@@ -2262,6 +2585,7 @@ function SemanticInventory() {
             { key: "inventory", icon: "📦", label: \`Inventory\` },
             { key: "search",    icon: "🔍", label: "Search"    },
             { key: "voice",     icon: "🎙️", label: "Voice"     },
+            { key: "camera",    icon: "📷", label: "Camera"    },
             { key: "settings",  icon: "⚙️", label: "Settings"  },
             { key: "add",       icon: "＋", label: "Add Item"  },
           ].map(t => (
@@ -2452,6 +2776,7 @@ function SemanticInventory() {
             <button className={activeTab==="inventory" ? "glass-btn" : "glass-btn-secondary"} style={d.tab(activeTab==="inventory")} onClick={() => setActiveTab("inventory")}>📦 Inventory ({inventory.length})</button>
             <button className={activeTab==="search" ? "glass-btn" : "glass-btn-secondary"} style={d.tab(activeTab==="search")}    onClick={() => setActiveTab("search")}>🔍 Results {results ? \`(\${results.length})\` : ""}</button>
             <button className={activeTab==="voice" ? "glass-btn" : "glass-btn-secondary"} style={d.tab(activeTab==="voice")} onClick={() => setActiveTab("voice")}>🎙️ Voice</button>
+            <button className={activeTab==="camera" ? "glass-btn" : "glass-btn-secondary"} style={d.tab(activeTab==="camera")} onClick={() => setActiveTab("camera")}>📷 Camera</button>
           </div>
 
           {activeTab === "inventory" && showRoomFilters && (
@@ -2505,6 +2830,7 @@ function SemanticInventory() {
           )}
 
           {activeTab === "voice" && renderVoicePanel()}
+          {activeTab === "camera" && renderCameraPanel()}
 
           {loading.search && (
             <div style={{ display:"flex", alignItems:"center", gap:9, padding:"32px 0", justifyContent:"center", color:"#64748b", fontSize:11 }}>
@@ -2512,7 +2838,7 @@ function SemanticInventory() {
             </div>
           )}
 
-          {!loading.search && activeTab !== "voice" && displayItems.length === 0 && (
+          {!loading.search && (activeTab === "inventory" || activeTab === "search") && displayItems.length === 0 && (
             <div style={{ textAlign:"center", padding:"44px 20px", color:"#475569" }}>
               <div style={{ fontSize:38, marginBottom:9 }}>{activeTab==="search" ? "🔍" : "📦"}</div>
               <div style={{ fontSize:13, color:"#64748b", marginBottom:4 }}>
@@ -2525,7 +2851,7 @@ function SemanticInventory() {
             </div>
           )}
 
-          {!loading.search && activeTab !== "voice" && displayItems.map(item => <ItemCard key={item.id} item={item} />)}
+          {!loading.search && (activeTab === "inventory" || activeTab === "search") && displayItems.map(item => <ItemCard key={item.id} item={item} />)}
         </div>
       </div>
 
@@ -2568,6 +2894,15 @@ const m = {
   inp:     { width:"100%", borderRadius:8, padding:"11px 12px", color:"#e2e8f0", fontSize:TYPE.md, lineHeight:"1.35", fontFamily:INPUT_FF,
              boxSizing:"border-box", display:"block" },
   addForm: { display:"flex", flexDirection:"column", gap:10 },
+  cameraGrid:{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:8 },
+  cameraPreview:{ width:"100%", minHeight:260, borderRadius:12, overflow:"hidden", border:"1px solid rgba(148, 163, 184, 0.16)", background:"rgba(15, 23, 42, 0.6)", display:"flex", alignItems:"center", justifyContent:"center" },
+  cameraMedia:{ display:"block", width:"100%", height:"100%", minHeight:260, objectFit:"cover", background:"#020617" },
+  cameraPlaceholder:{ color:"#94a3b8", fontSize:12, lineHeight:1.6, padding:"24px 18px", textAlign:"center" },
+  cameraActionRow:{ display:"flex", flexDirection:"column", gap:8 },
+  cameraActionBtn:{ width:"100%" },
+  cameraLoading:{ display:"flex", alignItems:"center", gap:10, color:"#94a3b8", fontSize:12 },
+  cameraError:{ display:"flex", alignItems:"center", justifyContent:"space-between", gap:10, borderRadius:10, padding:"10px 12px", color:"#f87171", background:"rgba(127, 29, 29, 0.45)", border:"1px solid rgba(248, 113, 113, 0.2)", fontSize:12, lineHeight:1.5 },
+  cameraInlineBtn:{ border:"1px solid rgba(248, 113, 113, 0.35)", background:"rgba(127, 29, 29, 0.1)", color:"#fecaca", borderRadius:8, padding:"8px 12px", fontSize:12, fontFamily:FF, cursor:"pointer", flexShrink:0 },
   filterRow:{ display:"flex", flexWrap:"wrap", gap:8, padding:"2px 2px 8px" },
   filterPill:(a) => ({
              padding:"6px 12px", borderRadius:999, border:"1px solid",
@@ -2608,6 +2943,15 @@ const d = {
             display:"flex", flexDirection:"column", gap:16, overflowY:"auto", borderRadius: "0 12px 12px 0" },
   secLbl: { fontSize:TYPE.xs, letterSpacing:"1.2px", color:"#94a3b8", textTransform:"uppercase", marginBottom:7, fontWeight:600 },
   form:   { display:"flex", flexDirection:"column", gap:6 },
+  cameraGrid:{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10 },
+  cameraPreview:{ width:"100%", minHeight:360, borderRadius:12, overflow:"hidden", border:"1px solid rgba(148, 163, 184, 0.16)", background:"rgba(15, 23, 42, 0.6)", display:"flex", alignItems:"center", justifyContent:"center" },
+  cameraMedia:{ display:"block", width:"100%", height:"100%", minHeight:360, objectFit:"cover", background:"#020617" },
+  cameraPlaceholder:{ color:"#94a3b8", fontSize:12, lineHeight:1.6, padding:"24px 18px", textAlign:"center" },
+  cameraActionRow:{ display:"flex", alignItems:"center", gap:12, flexWrap:"wrap" },
+  cameraActionBtn:{ width:"auto", minWidth:140 },
+  cameraLoading:{ display:"flex", alignItems:"center", gap:10, color:"#94a3b8", fontSize:12 },
+  cameraError:{ display:"flex", alignItems:"center", justifyContent:"space-between", gap:10, borderRadius:10, padding:"10px 12px", color:"#f87171", background:"rgba(127, 29, 29, 0.45)", border:"1px solid rgba(248, 113, 113, 0.2)", fontSize:12, lineHeight:1.5 },
+  cameraInlineBtn:{ border:"1px solid rgba(248, 113, 113, 0.35)", background:"rgba(127, 29, 29, 0.1)", color:"#fecaca", borderRadius:8, padding:"8px 12px", fontSize:12, fontFamily:FF, cursor:"pointer", flexShrink:0 },
   inp:    { width:"100%", borderRadius:6, padding:"9px 10px", color:"#e2e8f0", fontSize:TYPE.md, outline:"none",
             boxSizing:"border-box", fontFamily:INPUT_FF, transition:"border-color 0.15s" },
   ta:     { width:"100%", borderRadius:6, padding:"9px 10px", color:"#e2e8f0", fontSize:TYPE.md, outline:"none",

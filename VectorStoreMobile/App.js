@@ -1,4 +1,5 @@
 import { StatusBar } from 'expo-status-bar';
+import { isRunningInExpoGo } from 'expo';
 import { useEffect, useRef, useState } from 'react';
 import { Platform, StyleSheet, View } from 'react-native';
 import { WebView } from 'react-native-webview';
@@ -8,6 +9,13 @@ const DEFAULT_CAPABILITIES = {
   type: 'voice/capabilities',
   mode: 'disabled',
   speechAvailable: false,
+};
+
+const DEFAULT_CAMERA_CAPABILITIES = {
+  type: 'camera/capabilities',
+  mode: 'disabled',
+  cameraAvailable: false,
+  reason: 'unsupported',
 };
 
 const VOICE_ERROR_MESSAGES = {
@@ -78,6 +86,15 @@ export default function App() {
   const stopRequestedRef = useRef(false);
   const stopRetryTimeoutRef = useRef(null);
   const [voiceCapabilities, setVoiceCapabilities] = useState(DEFAULT_CAPABILITIES);
+  const [cameraCapabilities] = useState(() => {
+    const supported = !isRunningInExpoGo();
+    return {
+      type: 'camera/capabilities',
+      mode: supported ? 'native-webview' : 'disabled',
+      cameraAvailable: supported,
+      reason: supported ? 'supported' : 'expo-go',
+    };
+  });
 
   const emitToWebView = (payload) => {
     if (!webViewReadyRef.current || !webViewRef.current) return;
@@ -245,6 +262,10 @@ export default function App() {
     emitToWebView(voiceCapabilities);
   }, [voiceCapabilities]);
 
+  useEffect(() => {
+    emitToWebView(cameraCapabilities);
+  }, [cameraCapabilities]);
+
   const handleVoiceStart = async () => {
     const speechModule = speechModuleRef.current;
     if (!speechModule || voiceModeRef.current !== 'native') {
@@ -374,6 +395,9 @@ export default function App() {
       case 'voice/check-support':
         emitToWebView(voiceCapabilities);
         break;
+      case 'camera/check-support':
+        emitToWebView(cameraCapabilities);
+        break;
       case 'voice/start':
         void handleVoiceStart();
         break;
@@ -400,12 +424,14 @@ export default function App() {
         domStorageEnabled={true}
         allowsInlineMediaPlayback={true}
         mediaPlaybackRequiresUserAction={false}
+        mediaCapturePermissionGrantType="grantIfSameHostElsePrompt"
         mixedContentMode="compatibility"
         scalesPageToFit={false}
         onMessage={handleWebViewMessage}
         onLoadEnd={() => {
           webViewReadyRef.current = true;
           emitToWebView(voiceCapabilities);
+          emitToWebView(cameraCapabilities);
         }}
       />
     </View>
