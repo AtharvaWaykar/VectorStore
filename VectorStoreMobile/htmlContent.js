@@ -864,11 +864,22 @@ function SemanticInventory() {
   useEffect(() => {
     if (!videoRef.current) return;
     if (cameraStream) {
-      videoRef.current.srcObject = cameraStream;
-      const finishSwitch = () => setCameraSwitching(false);
-      videoRef.current.onloadedmetadata = finishSwitch;
-      videoRef.current.play?.().then(finishSwitch).catch(() => setCameraSwitching(false));
-      return;
+      const video = videoRef.current;
+      let settled = false;
+      const finishSwitch = () => {
+        if (settled) return;
+        settled = true;
+        setCameraSwitching(false);
+      };
+      video.srcObject = cameraStream;
+      video.onloadedmetadata = finishSwitch;
+      const fallbackTimer = window.setTimeout(finishSwitch, 450);
+      video.play?.().then(finishSwitch).catch(finishSwitch);
+      return () => {
+        settled = true;
+        window.clearTimeout(fallbackTimer);
+        if (video) video.onloadedmetadata = null;
+      };
     }
     videoRef.current.srcObject = null;
     videoRef.current.onloadedmetadata = null;
@@ -1529,16 +1540,19 @@ function SemanticInventory() {
 
     if (window.ReactNativeWebView && !cameraAvailable) {
       setCameraError(CAMERA_NATIVE_UNSUPPORTED);
+      setCameraSwitching(false);
       return;
     }
 
     if (!window.ReactNativeWebView && window.isSecureContext === false) {
       setCameraError("Camera is only available on HTTPS or localhost.");
+      setCameraSwitching(false);
       return;
     }
 
     if (!navigator.mediaDevices || typeof navigator.mediaDevices.getUserMedia !== "function") {
       setCameraError("Camera is not supported in this browser.");
+      setCameraSwitching(false);
       return;
     }
 
@@ -2075,6 +2089,8 @@ function SemanticInventory() {
                     </button>
                   )}
                 </>
+              ) : cameraSwitching ? (
+                <div style={compact ? m.cameraTransitionFill : d.cameraTransitionFill} />
               ) : (
                 <div style={compact ? m.cameraPlaceholder : d.cameraPlaceholder}>
                   Room and box labels are applied to every detected item from this scan.
@@ -2926,11 +2942,12 @@ const m = {
              boxSizing:"border-box", display:"block" },
   addForm: { display:"flex", flexDirection:"column", gap:10 },
   cameraGrid:{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:8 },
-  cameraPreview:{ width:"100%", minHeight:260, borderRadius:12, overflow:"hidden", border:"1px solid rgba(148, 163, 184, 0.16)", background:"rgba(15, 23, 42, 0.6)", display:"flex", alignItems:"center", justifyContent:"center", position:"relative" },
-  cameraMedia:{ display:"block", width:"100%", height:"100%", minHeight:260, objectFit:"cover", background:"#020617" },
+  cameraPreview:{ width:"100%", minHeight:260, aspectRatio:"3 / 4", borderRadius:12, overflow:"hidden", border:"1px solid rgba(148, 163, 184, 0.16)", background:"rgba(15, 23, 42, 0.6)", display:"block", position:"relative" },
+  cameraMedia:{ position:"absolute", inset:0, display:"block", width:"100%", height:"100%", objectFit:"cover", background:"#020617" },
+  cameraTransitionFill:{ position:"absolute", inset:0, display:"block", width:"100%", height:"100%", background:"#000" },
   cameraTransitionMask:{ position:"absolute", inset:0, zIndex:1, background:"#000", opacity:0.96, pointerEvents:"none", transition:"opacity 0.18s ease" },
   cameraFlipBtn:{ position:"absolute", top:10, right:10, zIndex:2, border:"1px solid rgba(148, 163, 184, 0.25)", background:"rgba(15, 23, 42, 0.72)", color:"#e2e8f0", borderRadius:999, padding:"8px 12px", fontSize:12, fontFamily:FF, cursor:"pointer", backdropFilter:"blur(10px)", WebkitBackdropFilter:"blur(10px)" },
-  cameraPlaceholder:{ color:"#94a3b8", fontSize:12, lineHeight:1.6, padding:"24px 18px", textAlign:"center" },
+  cameraPlaceholder:{ position:"absolute", inset:0, color:"#94a3b8", fontSize:12, lineHeight:1.6, padding:"24px 18px", textAlign:"center", display:"flex", alignItems:"center", justifyContent:"center" },
   cameraActionRow:{ display:"flex", flexDirection:"column", gap:8 },
   cameraActionBtn:{ width:"100%" },
   cameraLoading:{ display:"flex", alignItems:"center", gap:10, color:"#94a3b8", fontSize:12 },
@@ -2977,11 +2994,12 @@ const d = {
   secLbl: { fontSize:TYPE.xs, letterSpacing:"1.2px", color:"#94a3b8", textTransform:"uppercase", marginBottom:7, fontWeight:600 },
   form:   { display:"flex", flexDirection:"column", gap:6 },
   cameraGrid:{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10 },
-  cameraPreview:{ width:"100%", minHeight:360, borderRadius:12, overflow:"hidden", border:"1px solid rgba(148, 163, 184, 0.16)", background:"rgba(15, 23, 42, 0.6)", display:"flex", alignItems:"center", justifyContent:"center", position:"relative" },
-  cameraMedia:{ display:"block", width:"100%", height:"100%", minHeight:360, objectFit:"cover", background:"#020617" },
+  cameraPreview:{ width:"100%", minHeight:360, aspectRatio:"3 / 4", borderRadius:12, overflow:"hidden", border:"1px solid rgba(148, 163, 184, 0.16)", background:"rgba(15, 23, 42, 0.6)", display:"block", position:"relative" },
+  cameraMedia:{ position:"absolute", inset:0, display:"block", width:"100%", height:"100%", objectFit:"cover", background:"#020617" },
+  cameraTransitionFill:{ position:"absolute", inset:0, display:"block", width:"100%", height:"100%", background:"#000" },
   cameraTransitionMask:{ position:"absolute", inset:0, zIndex:1, background:"#000", opacity:0.96, pointerEvents:"none", transition:"opacity 0.18s ease" },
   cameraFlipBtn:{ position:"absolute", top:12, right:12, zIndex:2, border:"1px solid rgba(148, 163, 184, 0.25)", background:"rgba(15, 23, 42, 0.72)", color:"#e2e8f0", borderRadius:999, padding:"8px 12px", fontSize:12, fontFamily:FF, cursor:"pointer", backdropFilter:"blur(10px)", WebkitBackdropFilter:"blur(10px)" },
-  cameraPlaceholder:{ color:"#94a3b8", fontSize:12, lineHeight:1.6, padding:"24px 18px", textAlign:"center" },
+  cameraPlaceholder:{ position:"absolute", inset:0, color:"#94a3b8", fontSize:12, lineHeight:1.6, padding:"24px 18px", textAlign:"center", display:"flex", alignItems:"center", justifyContent:"center" },
   cameraActionRow:{ display:"flex", alignItems:"center", gap:12, flexWrap:"wrap" },
   cameraActionBtn:{ width:"auto", minWidth:140 },
   cameraLoading:{ display:"flex", alignItems:"center", gap:10, color:"#94a3b8", fontSize:12 },
