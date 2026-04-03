@@ -382,6 +382,54 @@ export default function App() {
     }
   };
 
+  const handleCVRequest = async (payload) => {
+    const { requestId, imageBase64 } = payload;
+    try {
+      const apiKey = process.env.EXPO_PUBLIC_GROQ_API_KEY;
+      if (!apiKey) {
+        emitToWebView({ type: 'cv/response', requestId, error: 'GROQ_API_KEY not set' });
+        return;
+      }
+      const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${apiKey}`,
+        },
+        body: JSON.stringify({
+          model: 'meta-llama/llama-4-scout-17b-16e-instruct',
+          max_tokens: 512,
+          messages: [
+            {
+              role: 'user',
+              content: [
+                { type: 'image_url', image_url: { url: `data:image/jpeg;base64,${imageBase64}` } },
+                { type: 'text', text: 'List all distinct items visible in this image. Return ONLY a JSON array with no explanation: [{"name": string, "qty": number}]' },
+              ],
+            },
+          ],
+        }),
+      });
+      const data = await response.json();
+      if (!response.ok) {
+        emitToWebView({ type: 'cv/response', requestId, error: data?.error?.message || `API error ${response.status}` });
+        return;
+      }
+      const raw = data?.choices?.[0]?.message?.content || '';
+      let result;
+      try {
+        const match = raw.match(/\[[\s\S]*\]/);
+        result = JSON.parse(match ? match[0] : raw);
+      } catch {
+        emitToWebView({ type: 'cv/response', requestId, error: 'Failed to parse CV response' });
+        return;
+      }
+      emitToWebView({ type: 'cv/response', requestId, result });
+    } catch (error) {
+      emitToWebView({ type: 'cv/response', requestId, error: String(error?.message || error || 'unknown') });
+    }
+  };
+
   const handleWebViewMessage = (event) => {
     let payload;
 
@@ -406,6 +454,9 @@ export default function App() {
         break;
       case 'llm/request':
         void handleLLMRequest(payload);
+        break;
+      case 'cv/request':
+        void handleCVRequest(payload);
         break;
       default:
         break;

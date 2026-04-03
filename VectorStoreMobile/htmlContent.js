@@ -251,6 +251,7 @@ window.__VECTORSTOCK_NATIVE_BRIDGE__ = window.__VECTORSTOCK_NATIVE_BRIDGE__ || {
 };
 
 const _pendingLLMRequests = {};
+const _pendingCVRequests  = {};
 
 function postNativeMessage(payload) {
   if (!window.ReactNativeWebView || typeof window.ReactNativeWebView.postMessage !== "function") {
@@ -298,6 +299,7 @@ const loadQueue = [];
 const EMBEDDING_MODEL = 'Xenova/bge-small-en-v1.5';
 const BGE_QUERY_PREFIX = 'Represent this sentence for searching relevant passages: ';
 const DEFAULT_ROOMS = ["Garage", "Kitchen", "Bedroom", "Office", "Living Room", "Basement"];
+const CV_API_URL = ""; // set this to the real endpoint URL when ready — leave empty for stub mode
 const CAMERA_PERMISSION_DENIED = "Camera access denied. Allow camera access in browser settings.";
 const CAMERA_NOT_FOUND = "No camera found on this device.";
 const CAMERA_NO_ITEMS = "No items detected — try retaking the photo.";
@@ -311,6 +313,40 @@ function normalizeLabel(value) {
 function prettyLabel(value) {
   return normalizeLabel(value).replace(/\b\w/g, c => c.toUpperCase());
 }
+
+async function detectItems(imageBase64, room, box) {
+  // Stub mode — active when not running inside the native app
+  if (!window.ReactNativeWebView) {
+    await new Promise(resolve => setTimeout(resolve, 1500));
+    return [
+      { name: "Hammer",         qty: 1 },
+      { name: "Screwdriver",    qty: 3 },
+      { name: "Measuring Tape", qty: 1 },
+    ];
+  }
+
+  // Native mode — send image to App.js which calls Groq vision
+  return new Promise((resolve, reject) => {
+    const requestId = String(Date.now()) + Math.random().toString(36).slice(2);
+    _pendingCVRequests[requestId] = { resolve, reject };
+
+    const sent = postNativeMessage({ type: "cv/request", requestId, imageBase64 });
+    if (!sent) {
+      delete _pendingCVRequests[requestId];
+      reject(new Error("Native bridge unavailable"));
+      return;
+    }
+
+    setTimeout(() => {
+      if (_pendingCVRequests[requestId]) {
+        delete _pendingCVRequests[requestId];
+        reject(new Error("CV request timed out"));
+      }
+    }, 30000);
+  });
+}
+
+window.detectItems = detectItems;
 
 function getDetectItemsAdapter() {
   return typeof window.detectItems === "function" ? window.detectItems : null;
@@ -664,6 +700,7 @@ function SemanticInventory() {
   const [cameraAvailable, setCameraAvailable] = useState(!window.ReactNativeWebView);
   const [clearRoomTarget, setClearRoomTarget] = useState("");
   const [pendingDeleteId, setPendingDeleteId] = useState(null);
+  const [reviewItems,     setReviewItems]     = useState([]);
   const cancelRef = useRef(false);
   const llmLoadingRef = useRef(false);
   const voiceTabCancelRef = useRef(false);
@@ -673,9 +710,10 @@ function SemanticInventory() {
   const tabScrollPositionsRef = useRef({ mobile: {}, desktop: {} });
   const videoRef = useRef(null);
   // Refs so window.vectorStoreAPI always holds the latest closure
-  const embedAndStoreRef = useRef(null);
-  const handleDeleteRef  = useRef(null);
-  const seedRef          = useRef(null);
+  const embedAndStoreRef    = useRef(null);
+  const handleDeleteRef     = useRef(null);
+  const seedRef             = useRef(null);
+  const batchEmbedStoreRef  = useRef(null);
   const stopCameraStream = useCallback((stream = cameraStream) => {
     if (!stream || typeof stream.getTracks !== "function") return;
     stream.getTracks().forEach(track => {
@@ -800,6 +838,17 @@ function SemanticInventory() {
         const pending = _pendingLLMRequests[requestId];
         if (pending) {
           delete _pendingLLMRequests[requestId];
+          if (error) pending.reject(new Error(error));
+          else pending.resolve(result);
+        }
+        return;
+      }
+
+      if (payload.type === "cv/response") {
+        const { requestId, result, error } = payload;
+        const pending = _pendingCVRequests[requestId];
+        if (pending) {
+          delete _pendingCVRequests[requestId];
           if (error) pending.reject(new Error(error));
           else pending.resolve(result);
         }
@@ -1087,6 +1136,61 @@ function SemanticInventory() {
   // ── Expose API on window for external callers (e.g. Person A's intent pipeline) ──
   embedAndStoreRef.current = embedAndStoreItem;
   handleDeleteRef.current  = handleDeleteByIntent;
+  batchEmbedStoreRef.current = async (confirmedItems, onProgress) => {
+    const total = confirmedItems.length;
+    const stored = [];
+    for (let i = 0; i < total; i++) {
+      const item = confirmedItems[i];
+      onProgress?.({ done: i, total, current: item.name });
+      try {
+        const result = await embedAndStoreItem({
+          name:   item.name,
+          qty:    String(item.qty ?? 1),
+          room:   item.room,
+          box:    item.box || "",
+          source: "camera",
+        });
+        stored.push(result);
+      } catch (e) {
+        console.warn(\`Skipped "\${item.name}": \${e.message}\`);
+      }
+      onProgress?.({ done: i + 1, total, current: item.name });
+    }
+    return stored;
+  };
+  const handleReviewUpdate = (id, field, value) => {
+    setReviewItems(prev => prev.map(item => item.id === id ? { ...item, [field]: value } : item));
+  };
+
+  const handleReviewRemove = (id) => {
+    setReviewItems(prev => prev.filter(item => item.id !== id));
+  };
+
+  const handleReviewConfirm = async () => {
+    const valid = reviewItems.filter(item => normalizeLabel(item.name));
+    if (!valid.length) return toast("No valid items to store.", "error");
+    setSeeding(true);
+    setSeedProg({ done: 0, total: valid.length, current: "" });
+    try {
+      const stored = await batchEmbedStoreRef.current(valid, ({ done, total, current }) => {
+        setSeedProg({ done, total, current });
+      });
+      setInventory(prev => [...prev, ...stored]);
+      setReviewItems([]);
+      setActiveTab("inventory");
+      toast(\`Stored \${stored.length} item\${stored.length !== 1 ? "s" : ""} ✓\`);
+    } catch (e) {
+      toast(\`Store failed: \${e.message}\`, "error");
+    } finally {
+      setSeeding(false);
+    }
+  };
+
+  const handleReviewCancel = () => {
+    setReviewItems([]);
+    setActiveTab("camera");
+  };
+
   seedRef.current = async () => {
     if (modelStatus !== "ready") throw new Error("Model not ready yet");
     setSeeding(true);
@@ -1131,6 +1235,14 @@ function SemanticInventory() {
        * @returns {Promise<Array>}
        */
       seedSampleData: () => seedRef.current(),
+      detectItems: (imageBase64, room, box) => detectItems(imageBase64, room, box),
+      batchEmbedAndStore: (confirmedItems, onProgress) => batchEmbedStoreRef.current(confirmedItems, onProgress),
+    };
+    window.vectorStoreReview = {
+      openWithItems: (items) => {
+        setReviewItems(items);
+        setActiveTab("review");
+      },
     };
   }, []);
 
@@ -1653,7 +1765,7 @@ function SemanticInventory() {
       setCameraError(
         e?.message === "Camera detection is not available yet." || e?.message === "Review screen is not available yet."
           ? e.message
-          : CAMERA_DETECTION_FAILED
+          : \`\${CAMERA_DETECTION_FAILED} (\${e?.message || "unknown"})\`
       );
     } finally {
       setCameraLoading(false);
@@ -2015,6 +2127,80 @@ function SemanticInventory() {
     );
   };
 
+  const ReviewRow = ({ item, onUpdate, onRemove }) => (
+    <div className="glass-card" style={{ borderRadius:10, padding:12, display:"flex", gap:10, alignItems:"center" }}>
+      <div style={{ flex:1, display:"flex", gap:8 }}>
+        <input
+          className="glass-input"
+          style={{ flex:2, borderRadius:6, padding:"8px 10px", color:"#e2e8f0", fontSize:14, fontFamily:"inherit" }}
+          value={item.name}
+          onChange={e => onUpdate(item.id, "name", e.target.value)}
+          placeholder="Item name"
+        />
+        <input
+          className="glass-input"
+          style={{ width:64, borderRadius:6, padding:"8px 10px", color:"#e2e8f0", fontSize:14, textAlign:"center", fontFamily:"inherit" }}
+          value={item.qty}
+          onChange={e => onUpdate(item.id, "qty", e.target.value)}
+          placeholder="Qty"
+          type="number"
+          min={1}
+        />
+      </div>
+      <button
+        className="glass-btn-secondary"
+        style={{ padding:"8px 10px", borderRadius:6, color:"#f87171", border:"1px solid rgba(248,113,113,0.3)", cursor:"pointer" }}
+        onClick={() => onRemove(item.id)}
+      >✕</button>
+    </div>
+  );
+
+  const renderReviewPanel = () => {
+    const reviewRoom = reviewItems[0]?.room || "";
+    const reviewBox  = reviewItems[0]?.box  || "";
+    const reviewLocation = [reviewRoom, reviewBox].filter(Boolean).join(" › ");
+    return (
+      <div className="glass" style={{ ...m.addForm, padding:16 }}>
+        <div style={m.secLabel}>REVIEW DETECTED ITEMS</div>
+        <div style={{ fontSize:12, color:"#67e8f9" }}>
+          📍 {reviewLocation || "Unassigned"}
+        </div>
+        {reviewItems.length === 0 ? (
+          <div style={{ textAlign:"center", padding:40 }}>
+            <div style={{ fontSize:38, marginBottom:10 }}>📷</div>
+            <div style={{ color:"#64748b", marginBottom:16 }}>Nothing to store</div>
+            <button
+              className="glass-btn-secondary"
+              style={{ ...m.btn("default"), color:"#67e8f9", border:"1px solid rgba(34,211,238,0.35)" }}
+              onClick={() => setActiveTab("camera")}
+            >Retake Photo</button>
+          </div>
+        ) : (
+          <>
+            <div style={{ display:"flex", flexDirection:"column", gap:8 }}>
+              {reviewItems.map(item => (
+                <ReviewRow key={item.id} item={item} onUpdate={handleReviewUpdate} onRemove={handleReviewRemove} />
+              ))}
+            </div>
+            <button
+              className="glass-btn glow-cyan"
+              style={m.btn("primary", seeding)}
+              disabled={seeding}
+              onClick={handleReviewConfirm}
+            >
+              {seeding ? "Storing…" : \`Store All (\${reviewItems.length})\`}
+            </button>
+            <button
+              className="glass-btn-secondary"
+              style={{ ...m.btn("default"), color:"#94a3b8" }}
+              onClick={handleReviewCancel}
+            >Cancel / Retake</button>
+          </>
+        )}
+      </div>
+    );
+  };
+
   const renderCameraPanel = (compact = false) => {
     const canCapture = Boolean(cameraStream) && !cameraLoading;
     const cameraReady = cameraAvailable && cameraMode !== "checking";
@@ -2341,6 +2527,11 @@ function SemanticInventory() {
           {/* ── Camera tab ── */}
           {activeTab === "camera" && (
             renderCameraPanel(true)
+          )}
+
+          {/* ── Review tab ── */}
+          {activeTab === "review" && (
+            renderReviewPanel()
           )}
 
           {/* ── Settings tab ── */}
@@ -2901,6 +3092,7 @@ function SemanticInventory() {
 
           {activeTab === "voice" && renderVoicePanel()}
           {activeTab === "camera" && renderCameraPanel()}
+          {activeTab === "review" && renderReviewPanel()}
 
           {loading.search && (
             <div style={{ display:"flex", alignItems:"center", gap:9, padding:"32px 0", justifyContent:"center", color:"#64748b", fontSize:11 }}>
