@@ -654,8 +654,10 @@ function SemanticInventory() {
   const [boxMove,      setBoxMove]     = useState({ fromRoom: defaultRoom, box: "", toRoom: defaultRoom });
   const [cameraRoom,   setCameraRoom]   = useState(defaultRoom);
   const [cameraBox,    setCameraBox]    = useState("");
+  const [cameraFacing, setCameraFacing] = useState("environment");
   const [cameraStream, setCameraStream] = useState(null);
   const [cameraCapture, setCameraCapture] = useState(null);
+  const [cameraSwitching, setCameraSwitching] = useState(false);
   const [cameraLoading, setCameraLoading] = useState(false);
   const [cameraError,   setCameraError]   = useState(null);
   const [cameraMode,    setCameraMode]    = useState(window.ReactNativeWebView ? "checking" : "browser");
@@ -863,10 +865,13 @@ function SemanticInventory() {
     if (!videoRef.current) return;
     if (cameraStream) {
       videoRef.current.srcObject = cameraStream;
-      videoRef.current.play?.().catch(() => {});
+      const finishSwitch = () => setCameraSwitching(false);
+      videoRef.current.onloadedmetadata = finishSwitch;
+      videoRef.current.play?.().then(finishSwitch).catch(() => setCameraSwitching(false));
       return;
     }
     videoRef.current.srcObject = null;
+    videoRef.current.onloadedmetadata = null;
   }, [cameraStream]);
 
   useEffect(() => {
@@ -1514,10 +1519,13 @@ function SemanticInventory() {
     if (!stillExists) setCameraBox("");
   }, [cameraBoxes, cameraBox]);
 
-  const handleOpenCamera = async () => {
+  const handleOpenCamera = async (nextFacing = cameraFacing, options = {}) => {
+    const transition = Boolean(options.transition);
     setCameraError(null);
     setCameraCapture(null);
+    setCameraSwitching(transition);
     stopCameraStream();
+    setCameraFacing(nextFacing);
 
     if (window.ReactNativeWebView && !cameraAvailable) {
       setCameraError(CAMERA_NATIVE_UNSUPPORTED);
@@ -1536,7 +1544,7 @@ function SemanticInventory() {
 
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: "environment" },
+        video: { facingMode: { ideal: nextFacing } },
         audio: false,
       });
       setCameraStream(stream);
@@ -1548,7 +1556,13 @@ function SemanticInventory() {
       } else {
         setCameraError(\`Camera error: \${e?.message || "Unable to access camera."}\`);
       }
+      setCameraSwitching(false);
     }
+  };
+
+  const handleFlipCamera = async () => {
+    const nextFacing = cameraFacing === "environment" ? "user" : "environment";
+    await handleOpenCamera(nextFacing, { transition: true });
   };
 
   const handleDetect = async (base64) => {
@@ -1967,6 +1981,7 @@ function SemanticInventory() {
   const renderCameraPanel = (compact = false) => {
     const canCapture = Boolean(cameraStream) && !cameraLoading;
     const cameraReady = cameraAvailable && cameraMode !== "checking";
+    const showFlipCamera = Boolean(cameraStream) && !cameraCapture && !cameraLoading && !cameraSwitching;
     const previewStyle = compact ? m.cameraPreview : d.cameraPreview;
     const selectStyle = compact ? m.inp : d.sel;
     const buttonStyle = compact ? m.btn : d.btn;
@@ -2037,13 +2052,29 @@ function SemanticInventory() {
           <div style={previewStyle}>
             {!cameraCapture ? (
               cameraStream ? (
-                <video
-                  ref={videoRef}
-                  playsInline
-                  muted
-                  autoPlay
-                  style={compact ? m.cameraMedia : d.cameraMedia}
-                />
+                <>
+                  <video
+                    ref={videoRef}
+                    playsInline
+                    muted
+                    autoPlay
+                    style={compact ? m.cameraMedia : d.cameraMedia}
+                  />
+                  {cameraSwitching && (
+                    <div style={compact ? m.cameraTransitionMask : d.cameraTransitionMask} />
+                  )}
+                  {showFlipCamera && (
+                    <button
+                      className="glass-btn-secondary"
+                      style={compact ? m.cameraFlipBtn : d.cameraFlipBtn}
+                      onClick={handleFlipCamera}
+                      disabled={cameraLoading || cameraSwitching}
+                      title={cameraFacing === "environment" ? "Rear camera active" : "Front camera active"}
+                    >
+                      {cameraFacing === "environment" ? "↺ Rear" : "↺ Front"}
+                    </button>
+                  )}
+                </>
               ) : (
                 <div style={compact ? m.cameraPlaceholder : d.cameraPlaceholder}>
                   Room and box labels are applied to every detected item from this scan.
@@ -2895,8 +2926,10 @@ const m = {
              boxSizing:"border-box", display:"block" },
   addForm: { display:"flex", flexDirection:"column", gap:10 },
   cameraGrid:{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:8 },
-  cameraPreview:{ width:"100%", minHeight:260, borderRadius:12, overflow:"hidden", border:"1px solid rgba(148, 163, 184, 0.16)", background:"rgba(15, 23, 42, 0.6)", display:"flex", alignItems:"center", justifyContent:"center" },
+  cameraPreview:{ width:"100%", minHeight:260, borderRadius:12, overflow:"hidden", border:"1px solid rgba(148, 163, 184, 0.16)", background:"rgba(15, 23, 42, 0.6)", display:"flex", alignItems:"center", justifyContent:"center", position:"relative" },
   cameraMedia:{ display:"block", width:"100%", height:"100%", minHeight:260, objectFit:"cover", background:"#020617" },
+  cameraTransitionMask:{ position:"absolute", inset:0, zIndex:1, background:"#000", opacity:0.96, pointerEvents:"none", transition:"opacity 0.18s ease" },
+  cameraFlipBtn:{ position:"absolute", top:10, right:10, zIndex:2, border:"1px solid rgba(148, 163, 184, 0.25)", background:"rgba(15, 23, 42, 0.72)", color:"#e2e8f0", borderRadius:999, padding:"8px 12px", fontSize:12, fontFamily:FF, cursor:"pointer", backdropFilter:"blur(10px)", WebkitBackdropFilter:"blur(10px)" },
   cameraPlaceholder:{ color:"#94a3b8", fontSize:12, lineHeight:1.6, padding:"24px 18px", textAlign:"center" },
   cameraActionRow:{ display:"flex", flexDirection:"column", gap:8 },
   cameraActionBtn:{ width:"100%" },
@@ -2944,8 +2977,10 @@ const d = {
   secLbl: { fontSize:TYPE.xs, letterSpacing:"1.2px", color:"#94a3b8", textTransform:"uppercase", marginBottom:7, fontWeight:600 },
   form:   { display:"flex", flexDirection:"column", gap:6 },
   cameraGrid:{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10 },
-  cameraPreview:{ width:"100%", minHeight:360, borderRadius:12, overflow:"hidden", border:"1px solid rgba(148, 163, 184, 0.16)", background:"rgba(15, 23, 42, 0.6)", display:"flex", alignItems:"center", justifyContent:"center" },
+  cameraPreview:{ width:"100%", minHeight:360, borderRadius:12, overflow:"hidden", border:"1px solid rgba(148, 163, 184, 0.16)", background:"rgba(15, 23, 42, 0.6)", display:"flex", alignItems:"center", justifyContent:"center", position:"relative" },
   cameraMedia:{ display:"block", width:"100%", height:"100%", minHeight:360, objectFit:"cover", background:"#020617" },
+  cameraTransitionMask:{ position:"absolute", inset:0, zIndex:1, background:"#000", opacity:0.96, pointerEvents:"none", transition:"opacity 0.18s ease" },
+  cameraFlipBtn:{ position:"absolute", top:12, right:12, zIndex:2, border:"1px solid rgba(148, 163, 184, 0.25)", background:"rgba(15, 23, 42, 0.72)", color:"#e2e8f0", borderRadius:999, padding:"8px 12px", fontSize:12, fontFamily:FF, cursor:"pointer", backdropFilter:"blur(10px)", WebkitBackdropFilter:"blur(10px)" },
   cameraPlaceholder:{ color:"#94a3b8", fontSize:12, lineHeight:1.6, padding:"24px 18px", textAlign:"center" },
   cameraActionRow:{ display:"flex", alignItems:"center", gap:12, flexWrap:"wrap" },
   cameraActionBtn:{ width:"auto", minWidth:140 },
