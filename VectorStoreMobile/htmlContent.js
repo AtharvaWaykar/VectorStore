@@ -666,6 +666,7 @@ function SemanticInventory() {
   const [pendingDeleteId, setPendingDeleteId] = useState(null);
   const cancelRef = useRef(false);
   const llmLoadingRef = useRef(false);
+  const voiceTabCancelRef = useRef(false);
   const submitCommandRef = useRef(null);
   const mobileContentRef = useRef(null);
   const desktopMainRef = useRef(null);
@@ -757,6 +758,15 @@ function SemanticInventory() {
       if (payload.type === "voice/status") {
         const nextStatus = String(payload.status || "").trim();
         if (!nextStatus) return;
+        if (voiceTabCancelRef.current) {
+          if (nextStatus === "idle" || nextStatus === "error") {
+            voiceTabCancelRef.current = false;
+          }
+          setVoiceStatus(voiceMode === "native" ? "idle" : "disabled");
+          setVoiceLevel(-2);
+          setVoiceError(null);
+          return;
+        }
         if (nextStatus === "idle" && llmLoadingRef.current) return;
         setVoiceStatus(nextStatus);
         if (nextStatus !== "error") setVoiceError(null);
@@ -780,6 +790,7 @@ function SemanticInventory() {
       }
 
       if (payload.type === "voice/error") {
+        if (voiceTabCancelRef.current) return;
         triggerVoiceError(String(payload.message || "Voice recognition failed — please type instead."));
         return;
       }
@@ -796,6 +807,7 @@ function SemanticInventory() {
       }
 
       if (payload.type === "voice/transcript") {
+        if (voiceTabCancelRef.current) return;
         const transcript = String(payload.transcript || "").trim();
         if (!transcript) {
           triggerVoiceError("Didn't catch that — please try again.");
@@ -889,6 +901,19 @@ function SemanticInventory() {
     if (activeTab === "camera") return;
     stopCameraStream();
   }, [activeTab, stopCameraStream]);
+
+  useEffect(() => {
+    if (activeTab === "voice") return;
+    if (voiceStatus !== "recording" && voiceStatus !== "processing") return;
+    if (voiceMode !== "native") return;
+
+    voiceTabCancelRef.current = true;
+    setVoiceDraft("");
+    setVoiceError(null);
+    setVoiceLevel(-2);
+    setVoiceStatus("idle");
+    postNativeMessage({ type: "voice/stop" });
+  }, [activeTab, voiceStatus, voiceMode]);
 
   useEffect(() => () => {
     stopCameraStream();
@@ -1809,6 +1834,7 @@ function SemanticInventory() {
       triggerVoiceError("Voice recording requires a development build. Use the backup text box instead.");
       return;
     }
+    voiceTabCancelRef.current = false;
     setVoiceError(null);
     if (voiceStatus === "recording") {
       setVoiceStatus("processing");
