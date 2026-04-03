@@ -2105,14 +2105,14 @@ function SemanticInventory() {
             )}
           </div>
 
-          {!cameraCapture && cameraStream && (
+          {!cameraCapture && (cameraStream || cameraSwitching) && (
             <button
               className="glass-btn glow-cyan"
-              style={buttonStyle("primary", !canCapture)}
+              style={buttonStyle("primary", !canCapture || cameraSwitching)}
               onClick={handleCapture}
-              disabled={!canCapture}
+              disabled={!canCapture || cameraSwitching}
             >
-              Capture
+              {cameraSwitching ? "Switching..." : "Capture"}
             </button>
           )}
 
