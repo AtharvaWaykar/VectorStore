@@ -1531,12 +1531,12 @@ function SemanticInventory() {
   }, [cameraBoxes, cameraBox]);
 
   const handleOpenCamera = async (nextFacing = cameraFacing, options = {}) => {
+    const requestedFacing = nextFacing === "user" ? "user" : "environment";
     const transition = Boolean(options.transition);
     setCameraError(null);
     setCameraCapture(null);
     setCameraSwitching(transition);
     stopCameraStream();
-    setCameraFacing(nextFacing);
 
     if (window.ReactNativeWebView && !cameraAvailable) {
       setCameraError(CAMERA_NATIVE_UNSUPPORTED);
@@ -1558,9 +1558,11 @@ function SemanticInventory() {
 
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: { ideal: nextFacing } },
+        video: { facingMode: { ideal: requestedFacing } },
         audio: false,
       });
+      const actualFacing = stream.getVideoTracks?.()[0]?.getSettings?.().facingMode;
+      setCameraFacing(actualFacing === "user" ? "user" : actualFacing === "environment" ? "environment" : requestedFacing);
       setCameraStream(stream);
     } catch (e) {
       if (e?.name === "NotAllowedError" || e?.name === "PermissionDeniedError") {
@@ -1583,14 +1585,12 @@ function SemanticInventory() {
     const detectItems = getDetectItemsAdapter();
     if (!detectItems) {
       setCameraError("Camera detection is not available yet.");
-      setCameraCapture(null);
       return;
     }
 
     const reviewApi = getReviewAdapter();
     if (!reviewApi) {
       setCameraError("Review screen is not available yet.");
-      setCameraCapture(null);
       return;
     }
 
@@ -1600,7 +1600,6 @@ function SemanticInventory() {
       const detected = await detectItems(base64, cameraRoom, cameraBox);
       if (!Array.isArray(detected) || !detected.length) {
         setCameraError(CAMERA_NO_ITEMS);
-        setCameraCapture(null);
         return;
       }
 
@@ -1620,7 +1619,6 @@ function SemanticInventory() {
 
       if (!reviewItems.length) {
         setCameraError(CAMERA_NO_ITEMS);
-        setCameraCapture(null);
         return;
       }
 
@@ -1632,7 +1630,6 @@ function SemanticInventory() {
           ? e.message
           : CAMERA_DETECTION_FAILED
       );
-      setCameraCapture(null);
     } finally {
       setCameraLoading(false);
     }
@@ -2056,7 +2053,7 @@ function SemanticInventory() {
             <button
               className="glass-btn"
               style={buttonStyle("primary", cameraLoading || !cameraReady)}
-              onClick={handleOpenCamera}
+              onClick={() => handleOpenCamera()}
               disabled={cameraLoading || !cameraReady}
             >
               Open Camera
