@@ -371,9 +371,12 @@ export default function App() {
         result = JSON.parse(raw);
       } catch {
         dbg('parse_fail', raw.slice(0, 40));
-        result = { intent: 'unknown', raw: text };
+        result = {
+          action: { intent: 'unknown', raw: text },
+          dialogue: "Sorry, I couldn't understand that inventory request.",
+        };
       }
-      dbg('done', result.intent);
+      dbg('done', result?.action?.intent || 'unknown');
       emitToWebView({ type: 'llm/response', requestId, result });
     } catch (error) {
       const msg = String(error?.message || error || 'unknown');

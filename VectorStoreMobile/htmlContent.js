@@ -401,9 +401,18 @@ async function embedQuery(text) {
 
 // ─── Intent parsing (LLM stub + validation) ──────────────────────────────────
 const VALID_INTENTS = new Set(["add", "search", "delete", "unknown"]);
+const DEFAULT_UNKNOWN_DIALOGUE = "Sorry, I couldn't understand that inventory request.";
 
 function fallbackUnknownIntent(rawText) {
   return { intent: "unknown", raw: String(rawText ?? "") };
+}
+
+function fallbackLLMEnvelope(rawText, dialogue = DEFAULT_UNKNOWN_DIALOGUE) {
+  const safeDialogue = String(dialogue ?? "").trim() || DEFAULT_UNKNOWN_DIALOGUE;
+  return {
+    action: fallbackUnknownIntent(rawText),
+    dialogue: safeDialogue,
+  };
 }
 
 function coerceQty(value, fallback = 1) {
@@ -423,28 +432,48 @@ function parseDeleteQty(value) {
 
 function buildIntentSystemPrompt(activeRoom, activeBox) {
   const safeRoom = prettyLabel(activeRoom || "Garage");
-  const safeBox = "";
-  return \`You are a home inventory assistant. The user will give you a natural language input.
-Return ONLY a JSON object - no explanation, no markdown, no extra text.
+  const safeBox = prettyLabel(activeBox || "");
+  return \`You are a home inventory assistant for a local inventory app.
+The user will give you a natural-language request.
+Return ONLY valid JSON. No markdown. No prose outside JSON. No code fences.
 
 The current default room is: \${safeRoom}
 The current default box is: \${safeBox || "(no box)"}
 
-Use this schema:
+Return exactly this envelope:
+{
+  "action": {
+    "intent": "add | search | delete | unknown"
+  },
+  "dialogue": "assistant-style final response"
+}
+
+Allowed action shapes:
 - Add: { "intent": "add", "items": [{ "name": string, "qty": number, "room": string, "box": string }] }
 - Search: { "intent": "search", "query": string }
 - Delete: { "intent": "delete", "name": string, "room": string, "box": string, "qty": number | "all" }
 - Unknown: { "intent": "unknown", "raw": string }
 
 Rules:
-- Default room and box if not stated by the user
-- Multi-item inputs produce multiple objects in the items array
-- qty defaults to 1 if not mentioned
-- For delete, qty defaults to "all" if not mentioned
-- Always return valid JSON\`;
+- Always include a non-empty "dialogue" string.
+- The dialogue must sound like a helpful assistant speaking to the user.
+- The dialogue must match the action being taken or explain why no action was taken.
+- If the request is unrelated to the inventory app, return intent "unknown" and explain that you cannot help because it is outside inventory management.
+- If the request is ambiguous or you cannot confidently determine the inventory action, return intent "unknown" instead of guessing.
+- Use the default room and default box when the user does not specify them.
+- Multi-item add inputs produce multiple objects in the items array.
+- qty defaults to 1 if not mentioned.
+- For delete, qty defaults to "all" if not mentioned.
+- If the user says an item is put in, inside, or into another object, treat that destination object as the box when it is the natural container.
+- This container rule is broad. A bag, basket, bin, drawer, cabinet, case, pouch, backpack, tote, shelf, or another noun used as the destination container can be the box.
+- Example: "Put toothbrush in a bag in the bathroom" should map to item "Toothbrush", room "Bathroom", box "Bag".
+- For add, mention what was added and where.
+- For search, mention what is being looked for.
+- For delete, mention what is being removed and from where.
+- For unknown, explain clearly whether the request was unclear or outside the app's inventory functionality.\`;
 }
 
-function validateIntentResult(result, rawText, activeRoom, activeBox) {
+function validateIntentAction(result, rawText, activeRoom, activeBox) {
   if (!result || typeof result !== "object" || Array.isArray(result)) {
     return fallbackUnknownIntent(rawText);
   }
@@ -453,7 +482,7 @@ function validateIntentResult(result, rawText, activeRoom, activeBox) {
   if (!VALID_INTENTS.has(intent)) return fallbackUnknownIntent(rawText);
 
   const fallbackRoom = prettyLabel(activeRoom || "Garage");
-  const fallbackBox = "";
+  const fallbackBox = prettyLabel(activeBox || "");
 
   if (intent === "add") {
     if (!Array.isArray(result.items) || result.items.length === 0) {
@@ -498,6 +527,17 @@ function validateIntentResult(result, rawText, activeRoom, activeBox) {
     intent: "unknown",
     raw: normalizeLabel(result.raw || rawText),
   };
+}
+
+function validateLLMEnvelope(result, rawText, activeRoom, activeBox) {
+  if (!result || typeof result !== "object" || Array.isArray(result)) {
+    return fallbackLLMEnvelope(rawText);
+  }
+
+  const dialogue = String(result.dialogue ?? "").trim() || DEFAULT_UNKNOWN_DIALOGUE;
+  const actionInput = result.action && typeof result.action === "object" ? result.action : result;
+  const action = validateIntentAction(actionInput, rawText, activeRoom, activeBox);
+  return { action, dialogue };
 }
 
 async function sendToLLM(rawText, activeRoom, activeBox) {
@@ -682,6 +722,7 @@ function SemanticInventory() {
     try { return window.localStorage.getItem("vectorstock.ttsEnabled") === "true"; }
     catch { return false; }
   });
+  const [assistantReply, setAssistantReply] = useState(null);
   const [activeTab,    setActiveTab]   = useState("inventory");
   const [notif,        setNotif]       = useState(null);
   const [error,        setError]       = useState(null);
@@ -743,6 +784,26 @@ function SemanticInventory() {
     if (!ttsSupported || ttsEnabled) return;
     try { window.speechSynthesis.cancel(); } catch {}
   }, [ttsEnabled, ttsSupported]);
+
+  const speakAssistantDialogue = useCallback((dialogue) => {
+    const text = String(dialogue ?? "").trim();
+    if (!ttsEnabled || !ttsSupported || !text || !window.speechSynthesis) return;
+    try { window.speechSynthesis.cancel(); } catch {}
+    const utterance = new SpeechSynthesisUtterance(text);
+    window.speechSynthesis.speak(utterance);
+  }, [ttsEnabled, ttsSupported]);
+
+  const rememberAssistantReply = useCallback((rawText, envelope, origin = "command") => {
+    const reply = {
+      id: crypto.randomUUID(),
+      rawText: String(rawText ?? "").trim(),
+      dialogue: String(envelope?.dialogue ?? "").trim(),
+      intent: String(envelope?.action?.intent ?? "unknown").trim().toLowerCase() || "unknown",
+      origin,
+    };
+    setAssistantReply(reply);
+    if (origin === "voice") speakAssistantDialogue(reply.dialogue);
+  }, [speakAssistantDialogue]);
 
   const handleTabContentScroll = useCallback((event) => {
     const mode = isMobile ? "mobile" : "desktop";
@@ -1284,23 +1345,21 @@ function SemanticInventory() {
             : \`✓ Stored: \${storedItems.map(formatStoredConfirmation).join(" | ")}\`;
           toast(message);
           if (origin !== "voice") setCommandInput("");
+          return true;
         } finally {
           setLoading(l => ({ ...l, add: false }));
         }
-        break;
       }
       case "search":
         setSearchQuery(result.query);
         setActiveTab("search");
-        await handleSearch(result.query);
-        break;
+        return handleSearch(result.query);
       case "delete":
-        await handleDeleteByIntent(result.name, result.room, result.qty, result.box);
-        break;
+        return handleDeleteByIntent(result.name, result.room, result.qty, result.box);
       case "unknown":
+        return true;
       default:
-        applyCommandError("Sorry, I didn't understand that. Try again.", origin);
-        break;
+        return false;
     }
   };
 
@@ -1326,8 +1385,13 @@ function SemanticInventory() {
     setError(null);
     try {
       const llmRawResult = await sendToLLM(rawText, activeRoom, activeBox);
-      const parsedResult = validateIntentResult(llmRawResult, rawText, activeRoom, activeBox);
-      await routeIntentResult(parsedResult, source, origin);
+      const parsedResult = validateLLMEnvelope(llmRawResult, rawText, activeRoom, activeBox);
+      const didHandle = await routeIntentResult(parsedResult.action, source, origin);
+      if (!didHandle) {
+        applyCommandError("Sorry, I didn't understand that. Try again.", origin);
+        return false;
+      }
+      rememberAssistantReply(rawText, parsedResult, origin);
       if (origin === "voice") setVoiceStatus(voiceMode === "native" ? "idle" : "disabled");
       return true;
     } catch (e) {
@@ -1434,17 +1498,6 @@ function SemanticInventory() {
   };
 
   // ── Search ────────────────────────────────────────────────────────────────
-  function speakTopResult(results) {
-    if (!ttsEnabled || !results.length || !window.speechSynthesis) return;
-    const item = results[0];
-    window.speechSynthesis.cancel();
-    const loc = [item.room, item.box].filter(Boolean).join(", ");
-    const utterance = new SpeechSynthesisUtterance(
-      \`Your \${item.name} is in \${loc || "your inventory"}.\`
-    );
-    window.speechSynthesis.speak(utterance);
-  }
-
   const handleSearch = async (queryOverride = null) => {
     const q = String(queryOverride ?? searchQuery ?? "").trim();
     if (!q) return toast("Enter a search query.", "error");
@@ -1458,7 +1511,6 @@ function SemanticInventory() {
       const k = Math.max(1, Math.min(topK, inventory.length));
       const scored = searchItems(qVec, inventory, k);
       setResults(scored);
-      speakTopResult(scored);
       return true;
     } catch (e) {
       setError(String(e?.message ?? e)); toast("Search failed.", "error");
@@ -1733,6 +1785,14 @@ function SemanticInventory() {
     : activeTab === "inventory"
       ? filteredInventory
       : [];
+  const assistantReplyIntentTone = assistantReply?.intent === "unknown"
+    ? "#fbbf24"
+    : assistantReply?.intent === "delete"
+      ? "#fda4af"
+      : assistantReply?.intent === "search"
+        ? "#c4b5fd"
+        : "#67e8f9";
+  const assistantReplySourceLabel = assistantReply?.origin === "voice" ? "Voice" : "Typed command";
 
   const knownBoxRecords = Array.from(new Map([
     ...boxes.map(b => ({ name: prettyLabel(b.name), room: prettyLabel(b.room) })),
@@ -2028,6 +2088,34 @@ function SemanticInventory() {
       {notif.msg}
     </div>
   );
+
+  const AssistantReplyCard = ({ compact = false }) => assistantReply ? (
+    <div
+      className="glass"
+      style={{
+        ...(compact ? m.banner : d.banner),
+        flexDirection: "column",
+        alignItems: "stretch",
+        gap: 8,
+      }}
+    >
+      <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", gap:12, flexWrap:"wrap" }}>
+        <div style={{ fontSize:11, color:"#94a3b8", letterSpacing:"0.8px" }}>ASSISTANT REPLY</div>
+        <div style={{ display:"flex", gap:8, flexWrap:"wrap", fontSize:10 }}>
+          <span style={{ color:"#94a3b8" }}>{assistantReplySourceLabel}</span>
+          <span style={{ color: assistantReplyIntentTone, textTransform:"uppercase", letterSpacing:"0.8px" }}>
+            {assistantReply.intent}
+          </span>
+        </div>
+      </div>
+      <div style={{ fontSize:13, color:"#e2e8f0", lineHeight:1.6 }}>{assistantReply.dialogue}</div>
+      {assistantReply.rawText && (
+        <div style={{ fontSize:10, color:"#64748b", lineHeight:1.5 }}>
+          Request: "{assistantReply.rawText}"
+        </div>
+      )}
+    </div>
+  ) : null;
 
   const voiceStatusLabel = voiceStatus === "recording"
     ? (voiceDraft.trim() ? "Listening… live transcript is updating below" : "Listening… speak now")
@@ -2481,6 +2569,7 @@ function SemanticInventory() {
 
         {/* Progress banners */}
         <ProgressBanner />
+        <AssistantReplyCard compact />
 
         {/* Error */}
         {error && (
@@ -2653,14 +2742,14 @@ function SemanticInventory() {
               {ttsSupported && (
                 <>
                   <div style={{ fontSize:12, color:"#94a3b8", lineHeight:1.7 }}>
-                    Voice Readout:
+                    Spoken Voice Replies:
                   </div>
                   <button
                     className="glass-btn-secondary"
                     style={{ ...m.btn("secondary"), padding:"10px 12px" }}
                     onClick={() => setTtsEnabled(v => !v)}
                   >
-                    {ttsEnabled ? "TTS: On" : "TTS: Off"}
+                    {ttsEnabled ? "On" : "Off"}
                   </button>
                 </>
               )}
@@ -2847,18 +2936,9 @@ function SemanticInventory() {
               </label>
               {window.speechSynthesis && (
                 <>
-                  <div style={{ fontSize:12, color:"#94a3b8", lineHeight:1.7 }}>Voice Output:</div>
-                  <button
-                    className={ttsEnabled ? "glass-btn" : "glass-btn-secondary"}
-                    style={{
-                      ...m.btn("default"),
-                      color: ttsEnabled ? "#22d3ee" : "#64748b",
-                      border: ttsEnabled ? "1px solid rgba(34, 211, 238, 0.35)" : "1px solid rgba(148, 163, 184, 0.2)"
-                    }}
-                    onClick={() => setTtsEnabled(v => !v)}
-                  >
-                    {ttsEnabled ? "🔊 Read top result aloud: On" : "🔇 Read top result aloud: Off"}
-                  </button>
+                  <div style={{ fontSize:12, color:"#94a3b8", lineHeight:1.7 }}>
+                    Spoken replies apply to voice-originated assistant responses.
+                  </div>
                 </>
               )}
               <div style={{ fontSize:12, color:"#94a3b8", lineHeight:1.7 }}>Clear Room:</div>
@@ -3123,18 +3203,6 @@ function SemanticInventory() {
               <button className="glass-btn" style={d.btn("search", busy||!inventory.length||modelStatus!=="ready")} disabled={busy||!inventory.length||modelStatus!=="ready"} onClick={handleSearch}>
                 {loading.search ? "⟳ Vectorizing…" : "⌕ Search Nearest Neighbors"}
               </button>
-              {ttsSupported && (
-                <div style={d.toggleRow}>
-                  <span style={{ fontSize:11, color:"#94a3b8" }}>Voice readout</span>
-                  <button
-                    className={ttsEnabled ? "glass-btn" : "glass-btn-secondary"}
-                    style={d.toggleBtn(ttsEnabled)}
-                    onClick={() => setTtsEnabled(v => !v)}
-                  >
-                    {ttsEnabled ? "On" : "Off"}
-                  </button>
-                </div>
-              )}
             </div>
           </div>
 
@@ -3146,13 +3214,18 @@ function SemanticInventory() {
           <div style={{ borderTop:"1px solid rgba(148, 163, 184, 0.1)", paddingTop:12, display:"flex", flexDirection:"column", gap:8 }}>
             <div style={{ fontSize:11, color:"#94a3b8", letterSpacing:"0.5px" }}>SETTINGS</div>
             {window.speechSynthesis && (
-              <button
-                className={ttsEnabled ? "glass-btn" : "glass-btn-secondary"}
-                style={{ ...d.btn("default", false), fontSize:11, padding:"7px 10px", color: ttsEnabled ? "#22d3ee" : "#64748b", border: ttsEnabled ? "1px solid rgba(34, 211, 238, 0.35)" : "1px solid rgba(148, 163, 184, 0.2)" }}
-                onClick={() => setTtsEnabled(v => !v)}
-              >
-                {ttsEnabled ? "🔊 Read top result aloud: On" : "🔇 Read top result aloud: Off"}
-              </button>
+              <>
+                <button
+                  className={ttsEnabled ? "glass-btn" : "glass-btn-secondary"}
+                  style={{ ...d.btn("default", false), fontSize:11, padding:"7px 10px", color: ttsEnabled ? "#22d3ee" : "#64748b", border: ttsEnabled ? "1px solid rgba(34, 211, 238, 0.35)" : "1px solid rgba(148, 163, 184, 0.2)" }}
+                  onClick={() => setTtsEnabled(v => !v)}
+                >
+                  {ttsEnabled ? "🔊 Spoken Voice Replies: On" : "🔇 Spoken Voice Replies: Off"}
+                </button>
+                <div style={{ fontSize:10, color:"#64748b", lineHeight:1.6 }}>
+                  Spoken replies apply only to voice-originated assistant responses.
+                </div>
+              </>
             )}
             <div style={{ display:"flex", gap:6 }}>
               <select
@@ -3230,6 +3303,7 @@ function SemanticInventory() {
         {/* Main */}
         <div ref={desktopMainRef} style={d.main} onScroll={handleTabContentScroll}>
           <ProgressBanner />
+          <AssistantReplyCard />
           <div style={d.tabs}>
             <button className={activeTab==="inventory" ? "glass-btn" : "glass-btn-secondary"} style={d.tab(activeTab==="inventory")} onClick={() => setActiveTab("inventory")}>📦 Inventory ({inventory.length})</button>
             <button className={activeTab==="search" ? "glass-btn" : "glass-btn-secondary"} style={d.tab(activeTab==="search")}    onClick={() => setActiveTab("search")}>🔍 Results {results ? \`(\${results.length})\` : ""}</button>
@@ -3483,7 +3557,24 @@ function runTests() {
   const filteredResults = searchItems(queryVec, mockItems, 4, 0.5);
   const test7 = filteredResults.every(r => r.score >= 0.5);
 
-  console.log("Tests:", { test1, test2, test3, test4, test5, test6, test7 });
+  // Test 4: LLM envelope validation preserves dialogue and normalizes add actions
+  const validatedEnvelope = validateLLMEnvelope({
+    action: {
+      intent: "add",
+      items: [{ name: "toothbrush", qty: "2", room: "bathroom", box: "bag" }],
+    },
+    dialogue: "I added two toothbrushes to the bag in the bathroom.",
+  }, "Put toothbrush in a bag in the bathroom", "Garage", "");
+  const test8 = validatedEnvelope.action.intent === "add";
+  const test9 = validatedEnvelope.action.items[0].box === "Bag";
+  const test10 = validatedEnvelope.dialogue === "I added two toothbrushes to the bag in the bathroom.";
+
+  // Test 5: invalid LLM payload falls back to unknown with safe dialogue
+  const fallbackEnvelope = validateLLMEnvelope(null, "how do I change a tire", "Garage", "");
+  const test11 = fallbackEnvelope.action.intent === "unknown";
+  const test12 = typeof fallbackEnvelope.dialogue === "string" && fallbackEnvelope.dialogue.length > 0;
+
+  console.log("Tests:", { test1, test2, test3, test4, test5, test6, test7, test8, test9, test10, test11, test12 });
 }
 
 runTests();
