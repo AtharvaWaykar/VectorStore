@@ -400,7 +400,7 @@ async function embedQuery(text) {
 }
 
 // ─── Intent parsing (LLM stub + validation) ──────────────────────────────────
-const VALID_INTENTS = new Set(["add", "search", "delete", "unknown"]);
+const VALID_INTENTS = new Set(["add", "search", "delete", "special_request", "unknown"]);
 const DEFAULT_UNKNOWN_DIALOGUE = "Sorry, I couldn't understand that inventory request.";
 
 function fallbackUnknownIntent(rawText) {
@@ -443,16 +443,22 @@ The current default box is: \${safeBox || "(no box)"}
 Return exactly this envelope:
 {
   "action": {
-    "intent": "add | search | delete | unknown"
+    "intent": "add | search | delete | special_request | unknown"
   },
-  "dialogue": "assistant-style final response"
+  "dialogue": "assistant-style response",
+  "done": true
 }
 
 Allowed action shapes:
 - Add: { "intent": "add", "items": [{ "name": string, "qty": number, "room": string, "box": string }] }
 - Search: { "intent": "search", "query": string }
 - Delete: { "intent": "delete", "name": string, "room": string, "box": string, "qty": number | "all" }
+- Special Request: { "intent": "special_request", "request_type": "recipe_check | repair_check | general_query", "searches_needed": [{ "query": string, "purpose": string }] }
 - Unknown: { "intent": "unknown", "raw": string }
+
+The "done" field:
+- Set "done": true when you have fully answered the user and no further actions are needed
+- Set "done": false when you need to perform additional searches or actions
 
 Rules:
 - Always include a non-empty "dialogue" string.
@@ -470,7 +476,15 @@ Rules:
 - For add, mention what was added and where.
 - For search, mention what is being looked for.
 - For delete, mention what is being removed and from where.
-- For unknown, explain clearly whether the request was unclear or outside the app's inventory functionality.\`;
+- For unknown, explain clearly whether the request was unclear or outside the app's inventory functionality.
+
+Special request rules:
+- Use "special_request" for questions like "Do I have ingredients to make an apple pie?" or "Do I have supplies to fix a broken window?"
+- Use your own knowledge to determine what items, ingredients, or supplies are needed
+- List each item you need to search for in the "searches_needed" array with a brief purpose
+- You will receive search results for each item you request and can then search again or answer the user
+- NEVER ask the user follow-up questions. Answer with what you know from the search results and your own knowledge.
+- If you cannot help with the request, set "done": true and explain why in the dialogue.\`;
 }
 
 function validateIntentAction(result, rawText, activeRoom, activeBox) {
@@ -523,6 +537,21 @@ function validateIntentAction(result, rawText, activeRoom, activeBox) {
     };
   }
 
+  if (intent === "special_request") {
+    const requestType = String(result.request_type || "general_query").trim();
+    const searchesNeeded = Array.isArray(result.searches_needed)
+      ? result.searches_needed.filter(s => s && typeof s === "object" && normalizeLabel(s.query))
+      : [];
+    return {
+      intent: "special_request",
+      request_type: requestType,
+      searches_needed: searchesNeeded.map(s => ({
+        query: normalizeLabel(s.query),
+        purpose: normalizeLabel(s.purpose || ""),
+      })),
+    };
+  }
+
   return {
     intent: "unknown",
     raw: normalizeLabel(result.raw || rawText),
@@ -537,20 +566,27 @@ function validateLLMEnvelope(result, rawText, activeRoom, activeBox) {
   const dialogue = String(result.dialogue ?? "").trim() || DEFAULT_UNKNOWN_DIALOGUE;
   const actionInput = result.action && typeof result.action === "object" ? result.action : result;
   const action = validateIntentAction(actionInput, rawText, activeRoom, activeBox);
-  return { action, dialogue };
+  const done = typeof result.done === "boolean" ? result.done : true;
+  return { action, dialogue, done };
 }
 
-async function sendToLLM(rawText, activeRoom, activeBox) {
+async function sendToLLM(rawTextOrMessages, activeRoom, activeBox) {
   const systemPrompt = buildIntentSystemPrompt(activeRoom, activeBox);
+  const isMessages = Array.isArray(rawTextOrMessages);
   return new Promise((resolve, reject) => {
     const requestId = String(Date.now()) + Math.random().toString(36).slice(2);
     _pendingLLMRequests[requestId] = { resolve, reject };
-    const sent = postNativeMessage({
+    const payload = {
       type: "llm/request",
       requestId,
-      text: rawText,
       systemPrompt,
-    });
+    };
+    if (isMessages) {
+      payload.messages = rawTextOrMessages;
+    } else {
+      payload.text = String(rawTextOrMessages ?? "");
+    }
+    const sent = postNativeMessage(payload);
     if (!sent) {
       delete _pendingLLMRequests[requestId];
       reject(new Error("Native bridge unavailable"));
@@ -1317,6 +1353,59 @@ function SemanticInventory() {
     toast(message, "error");
   }, [triggerVoiceError]);
 
+  const formatActionResult = (actionResult, llmDialogue) => {
+    if (!actionResult || typeof actionResult !== "object") {
+      return "Action completed.";
+    }
+    const parts = [];
+    if (llmDialogue) {
+      parts.push(\`Assistant said: "\${llmDialogue}"\`);
+    }
+    switch (actionResult.intent) {
+      case "search": {
+        const header = \`SEARCH RESULT for "\${actionResult.query}":\`;
+        if (actionResult.notFound || actionResult.found.length === 0) {
+          parts.push(\`\${header} No items found matching "\${actionResult.query}" in the inventory.\`);
+        } else {
+          const items = actionResult.found.map(item => {
+            const loc = [prettyLabel(item.room), prettyLabel(item.box)].filter(Boolean).join(" > ");
+            return \`- \${item.name} (qty: \${item.qty}, location: \${loc || "Unassigned"}, relevance: \${item.score})\`;
+          }).join("\\n");
+          parts.push(\`\${header} Found \${actionResult.found.length} item(s):\\n\${items}\`);
+        }
+        break;
+      }
+      case "add":
+        if (actionResult.stored && actionResult.stored.length > 0) {
+          const items = actionResult.stored.map(item => prettyLabel(item.name)).join(", ");
+          parts.push(\`Successfully added: \${items}\`);
+        } else {
+          parts.push(\`Add action completed\`);
+        }
+        break;
+      case "delete":
+        if (actionResult.success) {
+          parts.push(\`Successfully deleted: \${actionResult.name}\`);
+        } else {
+          parts.push(\`Delete failed: \${actionResult.error || "unknown error"}\`);
+        }
+        break;
+      case "special_request":
+        parts.push(\`Special request received: \${actionResult.request_type || "general"}\`);
+        break;
+      case "unknown":
+        parts.push(\`Could not understand the request.\`);
+        break;
+      default:
+        if (actionResult.error) {
+          parts.push(\`Error: \${actionResult.error}\`);
+        } else {
+          parts.push("Action completed.");
+        }
+    }
+    return parts.join("\\n");
+  };
+
   const routeIntentResult = async (result, source = "text", origin = "command") => {
     switch (result.intent) {
       case "add": {
@@ -1345,21 +1434,48 @@ function SemanticInventory() {
             : \`✓ Stored: \${storedItems.map(formatStoredConfirmation).join(" | ")}\`;
           toast(message);
           if (origin !== "voice") setCommandInput("");
-          return true;
+          return { success: true, intent: "add", stored: storedItems };
+        } catch (e) {
+          return { success: false, intent: "add", error: String(e?.message ?? e) };
         } finally {
           setLoading(l => ({ ...l, add: false }));
         }
       }
-      case "search":
+      case "search": {
         setSearchQuery(result.query);
         setActiveTab("search");
-        return handleSearch(result.query);
+        const searchResult = await performSearch(result.query);
+        if (searchResult.success) {
+          setResults(searchResult.found);
+        }
+        return {
+          success: searchResult.success,
+          intent: "search",
+          query: searchResult.query,
+          found: searchResult.found.map(item => ({
+            name: item.name,
+            qty: normalizeLabel(item.qty) || "1",
+            room: item.room || "Unassigned",
+            box: item.box || "",
+            score: Math.round((item.score || 0) * 100) / 100,
+          })),
+          notFound: searchResult.notFound,
+          error: searchResult.error || null,
+        };
+      }
       case "delete":
-        return handleDeleteByIntent(result.name, result.room, result.qty, result.box);
+        try {
+          await handleDeleteByIntent(result.name, result.room, result.qty, result.box);
+          return { success: true, intent: "delete", name: result.name };
+        } catch (e) {
+          return { success: false, intent: "delete", error: String(e?.message ?? e) };
+        }
+      case "special_request":
+        return { success: true, intent: "special_request", request_type: result.request_type };
       case "unknown":
-        return true;
+        return { success: true, intent: "unknown" };
       default:
-        return false;
+        return { success: false, intent: "unknown" };
     }
   };
 
@@ -1383,11 +1499,95 @@ function SemanticInventory() {
     setLlmLoading(true);
     if (origin === "voice") setVoiceStatus("processing");
     setError(null);
+
+    const MAX_LOOPS = 8;
+    const chatHistory = [];
+
     try {
+      // ── First LLM call ──
       const llmRawResult = await sendToLLM(rawText, activeRoom, activeBox);
       const parsedResult = validateLLMEnvelope(llmRawResult, rawText, activeRoom, activeBox);
+
+      // ── If it's a special_request, enter the multi-turn loop ──
+      if (parsedResult.action.intent === "special_request") {
+        let loopCount = 0;
+        let currentParsed = parsedResult;
+
+        while (loopCount < MAX_LOOPS) {
+          // If LLM said it's done, speak the answer and exit
+          if (currentParsed.done) {
+            rememberAssistantReply(rawText, currentParsed, origin);
+            if (origin === "voice") setVoiceStatus(voiceMode === "native" ? "idle" : "disabled");
+            return true;
+          }
+
+          // Execute searches_needed from the LLM response (if any)
+          const searches = currentParsed.action.searches_needed || [];
+          const searchResults = [];
+          for (const s of searches) {
+            const sr = await performSearch(s.query);
+            searchResults.push(sr);
+          }
+
+          // Also handle other intents the LLM might return mid-loop (search, add, delete)
+          if (currentParsed.action.intent === "search" && searches.length === 0) {
+            const sr = await performSearch(currentParsed.action.query);
+            if (sr.success) setResults(sr.found);
+            searchResults.push(sr);
+          } else if (currentParsed.action.intent === "add") {
+            await routeIntentResult(currentParsed.action, source, origin);
+          } else if (currentParsed.action.intent === "delete") {
+            await routeIntentResult(currentParsed.action, source, origin);
+          }
+
+          // Format all search results and append to chat history
+          if (searchResults.length > 0) {
+            const formattedResults = searchResults.map(sr => {
+              if (sr.notFound || sr.found.length === 0) {
+                return \`SEARCH RESULT for "\${sr.query}": No items found matching "\${sr.query}" in the inventory.\`;
+              }
+              const items = sr.found.map(item => {
+                const loc = [prettyLabel(item.room), prettyLabel(item.box)].filter(Boolean).join(" > ");
+                return \`- \${item.name} (qty: \${item.qty}, location: \${loc || "Unassigned"}, relevance: \${Math.round((item.score || 0) * 100) / 100})\`;
+              }).join("\\n");
+              return \`SEARCH RESULT for "\${sr.query}": Found \${sr.found.length} item(s):\\n\${items}\`;
+            }).join("\\n\\n");
+
+            chatHistory.push({
+              role: "user",
+              content: formattedResults,
+            });
+          } else if (currentParsed.dialogue) {
+            // No searches but LLM had something to say
+            chatHistory.push({
+              role: "assistant",
+              content: currentParsed.dialogue,
+            });
+          }
+
+          // Build messages: system + history + original query
+          const messages = [
+            { role: "system", content: buildIntentSystemPrompt(activeRoom, activeBox) },
+            ...chatHistory,
+            { role: "user", content: rawText },
+          ];
+
+          // Next LLM call
+          const nextRaw = await sendToLLM(messages, activeRoom, activeBox);
+          currentParsed = validateLLMEnvelope(nextRaw, rawText, activeRoom, activeBox);
+          loopCount++;
+        }
+
+        // Safety: exceeded max loops, respond with what we have
+        const fallbackDialogue = \`I wasn't able to fully resolve that, but here's what I found: \${currentParsed.dialogue}\`;
+        rememberAssistantReply(rawText, { action: currentParsed.action, dialogue: fallbackDialogue, done: true }, origin);
+        if (origin === "voice") setVoiceStatus(voiceMode === "native" ? "idle" : "disabled");
+        return true;
+      }
+
+      // ── Standard flow (add/search/delete/unknown) — no loop ──
       const didHandle = await routeIntentResult(parsedResult.action, source, origin);
-      if (!didHandle) {
+      if (!didHandle || (typeof didHandle === "object" && !didHandle.success)) {
         applyCommandError("Sorry, I didn't understand that. Try again.", origin);
         return false;
       }
@@ -1498,6 +1698,22 @@ function SemanticInventory() {
   };
 
   // ── Search ────────────────────────────────────────────────────────────────
+  const performSearch = async (query, topKOverride = null) => {
+    const q = String(query ?? "").trim();
+    if (!q) return { success: false, query: "", found: [], notFound: true, error: "Empty query" };
+    if (!inventory.length) return { success: false, query: q, found: [], notFound: true, error: "Inventory is empty" };
+    if (modelStatus !== "ready") return { success: false, query: q, found: [], notFound: true, error: "Model not ready" };
+    try {
+      const qVec = await embedQuery(q);
+      qVec.__queryText = q;
+      const k = topKOverride ?? Math.max(1, Math.min(topK, inventory.length));
+      const scored = searchItems(qVec, inventory, k);
+      return { success: true, query: q, found: scored, notFound: scored.length === 0 };
+    } catch (e) {
+      return { success: false, query: q, found: [], notFound: true, error: String(e?.message ?? e) };
+    }
+  };
+
   const handleSearch = async (queryOverride = null) => {
     const q = String(queryOverride ?? searchQuery ?? "").trim();
     if (!q) return toast("Enter a search query.", "error");
@@ -1506,15 +1722,14 @@ function SemanticInventory() {
     if (queryOverride !== null && queryOverride !== undefined) setSearchQuery(q);
     setLoading(l => ({ ...l, search: true })); setResults(null); setError(null);
     try {
-      const qVec = await embedQuery(q);
-      qVec.__queryText = q;
-      const k = Math.max(1, Math.min(topK, inventory.length));
-      const scored = searchItems(qVec, inventory, k);
-      setResults(scored);
-      return true;
-    } catch (e) {
-      setError(String(e?.message ?? e)); toast("Search failed.", "error");
-      return false;
+      const result = await performSearch(q);
+      if (result.success) {
+        setResults(result.found);
+      } else {
+        setError(result.error || "Search failed");
+        toast("Search failed.", "error");
+      }
+      return result.success;
     } finally {
       setLoading(l => ({ ...l, search: false }));
     }

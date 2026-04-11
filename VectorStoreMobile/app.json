@@ -16,7 +16,9 @@
       "supportsTablet": true,
       "bundleIdentifier": "com.anonymous.vectorstore",
       "infoPlist": {
-        "NSCameraUsageDescription": "Allow $(PRODUCT_NAME) to use the camera to scan and label inventory items."
+        "NSCameraUsageDescription": "Allow $(PRODUCT_NAME) to use the camera to scan and label inventory items.",
+        "NSSpeechRecognitionUsageDescription": "Allow $(PRODUCT_NAME) to transcribe your voice inventory commands.",
+        "NSMicrophoneUsageDescription": "Allow $(PRODUCT_NAME) to use the microphone for voice inventory commands."
       }
     },
     "android": {
@@ -26,8 +28,12 @@
       },
       "edgeToEdgeEnabled": true,
       "permissions": [
-        "CAMERA"
-      ]
+        "CAMERA",
+        "android.permission.RECORD_AUDIO",
+        "CAMERA",
+        "android.permission.RECORD_AUDIO"
+      ],
+      "package": "com.anonymous.vectorstore"
     },
     "web": {
       "favicon": "./assets/favicon.png"

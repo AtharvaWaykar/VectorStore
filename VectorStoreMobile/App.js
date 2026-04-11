@@ -332,56 +332,106 @@ export default function App() {
   };
 
   const handleLLMRequest = async (payload) => {
-    const { requestId, text, systemPrompt } = payload;
+    const { requestId, text, systemPrompt, messages } = payload;
     const dbg = (event, detail = '') => emitVoiceDebug('llm_' + event, detail);
+
     try {
-      const apiKey = process.env.EXPO_PUBLIC_GROQ_API_KEY;
+      const apiKey = process.env.EXPO_PUBLIC_GEMINI_API_KEY;
       dbg('start', apiKey ? 'key_ok' : 'NO_KEY');
+
       if (!apiKey) {
-        emitToWebView({ type: 'llm/response', requestId, error: 'GROQ_API_KEY not set' });
+        emitToWebView({
+          type: 'llm/response',
+          requestId,
+          error: 'GEMINI_API_KEY not set',
+        });
         return;
       }
-      const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${apiKey}`,
-        },
-        body: JSON.stringify({
-          model: 'llama-3.1-8b-instant',
-          max_tokens: 512,
-          messages: [
-            { role: 'system', content: systemPrompt },
-            { role: 'user', content: text },
-          ],
-        }),
-      });
+
+      // 🔧 Build messages (Gemini does NOT support system role)
+      const chatMessages = Array.isArray(messages)
+        ? messages
+        : [
+            {
+              role: 'user',
+              content: `${systemPrompt || ''}\n\n${text || ''}`.trim(),
+            },
+          ];
+
+      // 🔧 Convert to Gemini format
+      const contents = chatMessages.map((m) => ({
+        role: m.role === 'assistant' ? 'model' : 'user',
+        parts: [{ text: m.content }],
+      }));
+
+      const response = await fetch(
+        `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`,
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            contents,
+            generationConfig: {
+              maxOutputTokens: 512,
+              temperature: 0.2,
+            },
+          }),
+        }
+      );
+
       dbg('http', String(response.status));
+
       const data = await response.json();
+
       if (!response.ok) {
-        const errMsg = data?.error?.message || `API error ${response.status}`;
+        const errMsg =
+          data?.error?.message || `API error ${response.status}`;
         dbg('api_err', errMsg);
-        emitToWebView({ type: 'llm/response', requestId, error: errMsg });
+        emitToWebView({
+          type: 'llm/response',
+          requestId,
+          error: errMsg,
+        });
         return;
       }
-      const raw = data?.choices?.[0]?.message?.content || '';
+
+      // 🔧 Gemini response parsing
+      const raw =
+        data?.candidates?.[0]?.content?.parts?.[0]?.text || '';
+
       dbg('raw', raw.slice(0, 80));
+
       let result;
+
       try {
         result = JSON.parse(raw);
       } catch {
         dbg('parse_fail', raw.slice(0, 40));
         result = {
           action: { intent: 'unknown', raw: text },
-          dialogue: "Sorry, I couldn't understand that inventory request.",
+          dialogue:
+            "Sorry, I couldn't understand that inventory request.",
         };
       }
+
       dbg('done', result?.action?.intent || 'unknown');
-      emitToWebView({ type: 'llm/response', requestId, result });
+
+      emitToWebView({
+        type: 'llm/response',
+        requestId,
+        result,
+      });
     } catch (error) {
       const msg = String(error?.message || error || 'unknown');
       dbg('catch', msg);
-      emitToWebView({ type: 'llm/response', requestId, error: msg });
+
+      emitToWebView({
+        type: 'llm/response',
+        requestId,
+        error: msg,
+      });
     }
   };
 
