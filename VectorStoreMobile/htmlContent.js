@@ -2892,7 +2892,7 @@ function SemanticInventory() {
                     className="glass-btn"
                     style={{ ...m.btn("search"), flex:1 }}
                     disabled={busy || !inventory.length || modelStatus !== "ready"}
-                    onClick={handleSearch}
+                    onClick={() => handleSearch()}
                   >
                     {loading.search ? "⟳ Searching…" : "⌕ Search"}
                   </button>
@@ -3415,7 +3415,7 @@ function SemanticInventory() {
                   value={topK} onChange={e => setTopK(Math.max(1,parseInt(e.target.value)||1))} disabled={modelStatus !== "ready"} />
                 <span>results</span>
               </div>
-              <button className="glass-btn" style={d.btn("search", busy||!inventory.length||modelStatus!=="ready")} disabled={busy||!inventory.length||modelStatus!=="ready"} onClick={handleSearch}>
+              <button className="glass-btn" style={d.btn("search", busy||!inventory.length||modelStatus!=="ready")} disabled={busy||!inventory.length||modelStatus!=="ready"} onClick={() => handleSearch()}>
                 {loading.search ? "⟳ Vectorizing…" : "⌕ Search Nearest Neighbors"}
               </button>
             </div>
