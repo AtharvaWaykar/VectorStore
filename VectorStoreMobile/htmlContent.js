@@ -2663,19 +2663,57 @@ function SemanticInventory() {
     );
   };
 
-  const ReviewRow = ({ item, onUpdate, onRemove }) => (
-    <div className="glass-card" style={{ borderRadius:10, padding:12, display:"flex", gap:10, alignItems:"center" }}>
-      <div style={{ flex:1, display:"flex", gap:8 }}>
+  const renderReviewMark = (compact = false) => (
+    <svg
+      width={compact ? 18 : 20}
+      height={compact ? 18 : 20}
+      viewBox="0 0 24 24"
+      fill="none"
+      aria-hidden="true"
+    >
+      <path d="M9 11l3 3L22 4" stroke="#f8fafc" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" />
+      <path d="M21 12v7a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2h11" stroke="#60a5fa" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+
+  const ReviewRow = ({ item, onUpdate, onRemove, compact = false }) => (
+    <div className="glass-card" style={{
+      borderRadius: 16,
+      padding: compact ? 12 : 14,
+      display: "flex",
+      gap: 10,
+      alignItems: "center",
+      background: "rgba(23, 27, 32, 0.96)",
+      border: "1px solid rgba(255, 255, 255, 0.06)",
+    }}>
+      <div style={{ flex: 1, display: "flex", gap: 8 }}>
         <input
           className="glass-input"
-          style={{ flex:2, borderRadius:6, padding:"8px 10px", color:"#e2e8f0", fontSize:14, fontFamily:"inherit" }}
+          style={{
+            flex: 2,
+            borderRadius: 10,
+            padding: "10px 12px",
+            color: "#f8fafc",
+            fontSize: 14,
+            fontFamily: INPUT_FF,
+            background: "rgba(67, 72, 75, 0.35)",
+          }}
           value={item.name}
           onChange={e => onUpdate(item.id, "name", e.target.value)}
           placeholder="Item name"
         />
         <input
           className="glass-input"
-          style={{ width:64, borderRadius:6, padding:"8px 10px", color:"#e2e8f0", fontSize:14, textAlign:"center", fontFamily:"inherit" }}
+          style={{
+            width: 64,
+            borderRadius: 10,
+            padding: "10px 12px",
+            color: "#f8fafc",
+            fontSize: 14,
+            textAlign: "center",
+            fontFamily: INPUT_FF,
+            background: "rgba(67, 72, 75, 0.35)",
+          }}
           value={item.qty}
           onChange={e => onUpdate(item.id, "qty", e.target.value)}
           placeholder="Qty"
@@ -2685,57 +2723,157 @@ function SemanticInventory() {
       </div>
       <button
         className="glass-btn-secondary"
-        style={{ padding:"8px 10px", borderRadius:6, color:"#f87171", border:"1px solid rgba(248,113,113,0.3)", cursor:"pointer" }}
+        style={{
+          padding: "10px 12px",
+          borderRadius: 10,
+          color: "#f87171",
+          border: "1px solid rgba(248, 113, 113, 0.3)",
+          cursor: "pointer",
+          background: "rgba(127, 29, 29, 0.2)",
+        }}
         onClick={() => onRemove(item.id)}
-      >✕</button>
+      >
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+          <path d="M18 6L6 18M6 6l12 12" strokeLinecap="round" strokeLinejoin="round" />
+        </svg>
+      </button>
     </div>
   );
 
-  const renderReviewPanel = () => {
+  const renderReviewPanel = (compact = false) => {
     const reviewRoom = reviewItems[0]?.room || "";
     const reviewBox  = reviewItems[0]?.box  || "";
     const reviewLocation = [reviewRoom, reviewBox].filter(Boolean).join(" › ");
+    const styles = compact ? m : d;
+    const panelStyle = compact ? { ...m.voicePanel, animation: "none" } : { ...d.voicePanel, animation: "none" };
+
     return (
-      <div className="glass" style={{ ...m.addForm, padding:16 }}>
-        <div style={m.secLabel}>REVIEW DETECTED ITEMS</div>
-        <div style={{ fontSize:12, color:"#67e8f9" }}>
-          📍 {reviewLocation || "Unassigned"}
+      <div style={panelStyle}>
+        {/* Header with badge */}
+        <div style={styles.voiceHeader}>
+          <div style={styles.voiceBadge}>
+            {renderReviewMark(compact)}
+            <span>Review</span>
+          </div>
+          <div style={styles.voiceHint}>{reviewItems.length} detected</div>
         </div>
+
+        {/* Location info card */}
+        <div style={styles.voiceComposer}>
+          <div style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 8,
+            padding: "10px 12px",
+            borderRadius: 12,
+            background: "rgba(96, 165, 250, 0.12)",
+            border: "1px solid rgba(96, 165, 250, 0.18)",
+          }}>
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#60a5fa" strokeWidth="2">
+              <path d="M12 2a7 7 0 00-7 7c0 5.25 7 13 7 13s7-7.75 7-13a7 7 0 00-7-7z" strokeLinecap="round" strokeLinejoin="round" />
+              <circle cx="12" cy="9" r="2.5" />
+            </svg>
+            <span style={{ fontSize: 13, color: "#bfdbfe", fontFamily: INPUT_FF }}>
+              {reviewLocation || "Unassigned"}
+            </span>
+          </div>
+        </div>
+
+        {/* Items list */}
         {reviewItems.length === 0 ? (
-          <div style={{ textAlign:"center", padding:40 }}>
-            <div style={{ fontSize:38, marginBottom:10 }}>📷</div>
-            <div style={{ color:"#64748b", marginBottom:16 }}>Nothing to store</div>
-            <button
-              className="glass-btn-secondary"
-              style={{ ...m.btn("default"), color:"#67e8f9", border:"1px solid rgba(34,211,238,0.35)" }}
-              onClick={() => setActiveTab("camera")}
-            >Retake Photo</button>
+          <div style={styles.voiceInfoCard}>
+            <div style={{ textAlign: "center", padding: 40 }}>
+              <div style={{ transform: "scale(1.5)", opacity: 0.5, marginBottom: 16 }}>{renderReviewMark(compact)}</div>
+              <div style={{ fontSize: 14, color: "#94a3b8", marginBottom: 16, fontFamily: INPUT_FF }}>Nothing to store</div>
+              <button
+                style={styles.voiceSendBtn(false)}
+                onClick={() => setActiveTab("camera")}
+              >
+                Retake Photo
+              </button>
+            </div>
           </div>
         ) : (
           <>
-            <div style={{ display:"flex", flexDirection:"column", gap:8 }}>
-              {reviewItems.map(item => (
-                <ReviewRow key={item.id} item={item} onUpdate={handleReviewUpdate} onRemove={handleReviewRemove} />
-              ))}
+            <div style={{
+              ...styles.voiceInfoCard,
+              maxHeight: compact ? "calc(100vh - 420px)" : 400,
+              overflowY: "auto",
+            }}>
+              <div style={{ fontSize: 11, color: "#8b949e", marginBottom: 10, letterSpacing: "0.8px", textTransform: "uppercase", fontFamily: INPUT_FF }}>
+                Edit detected items
+              </div>
+              <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                {reviewItems.map(item => (
+                  <ReviewRow key={item.id} item={item} onUpdate={handleReviewUpdate} onRemove={handleReviewRemove} compact={compact} />
+                ))}
+              </div>
             </div>
-            <button
-              className="glass-btn glow-cyan"
-              style={m.btn("primary", seeding)}
-              disabled={seeding}
-              onClick={handleReviewConfirm}
-            >
-              {seeding ? "Storing…" : \`Store All (\${reviewItems.length})\`}
-            </button>
-            <button
-              className="glass-btn-secondary"
-              style={{ ...m.btn("default"), color:"#94a3b8" }}
-              onClick={handleReviewCancel}
-            >Cancel / Retake</button>
+
+            {/* Action buttons */}
+            <div style={styles.voiceMicWrap}>
+              <button
+                className="glass-btn glow-cyan"
+                style={{
+                  ...styles.voiceMicBtn("idle", seeding),
+                  width: "100%",
+                  maxWidth: compact ? 280 : 320,
+                  height: compact ? 56 : 64,
+                  minHeight: compact ? 56 : 64,
+                  borderRadius: 16,
+                }}
+                disabled={seeding}
+                onClick={handleReviewConfirm}
+              >
+                {seeding ? (
+                  <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                    <div className="spin" style={{ width: 20, height: 20 }} />
+                    <span>Storing…</span>
+                  </div>
+                ) : (
+                  \`Store All (\${reviewItems.length})\`
+                )}
+              </button>
+
+              <button
+                className="glass-btn-secondary"
+                style={{
+                  width: "100%",
+                  maxWidth: compact ? 280 : 320,
+                  padding: "12px",
+                  borderRadius: 12,
+                  border: "1px solid rgba(148, 163, 184, 0.2)",
+                  background: "rgba(30, 41, 59, 0.5)",
+                  color: "#94a3b8",
+                  fontSize: 13,
+                  fontFamily: INPUT_FF,
+                  cursor: "pointer",
+                }}
+                onClick={handleReviewCancel}
+                disabled={seeding}
+              >
+                Cancel / Retake
+              </button>
+            </div>
           </>
         )}
       </div>
     );
   };
+
+
+  const renderCameraMark = (compact = false) => (
+    <svg
+      width={compact ? 18 : 20}
+      height={compact ? 18 : 20}
+      viewBox="0 0 24 24"
+      fill="none"
+      aria-hidden="true"
+    >
+      <path d="M4.5 8.5h3l1.5-2h6l1.5 2h3a1.5 1.5 0 0 1 1.5 1.5v8a1.5 1.5 0 0 1-1.5 1.5h-15A1.5 1.5 0 0 1 3 18v-8A1.5 1.5 0 0 1 4.5 8.5Z" stroke="#f8fafc" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" />
+      <circle cx="12" cy="14" r="3.5" stroke="#60a5fa" strokeWidth="1.9" />
+    </svg>
+  );
 
   const renderCameraPanel = (compact = false) => {
     const canCapture = Boolean(cameraStream) && !cameraLoading;
@@ -2743,28 +2881,29 @@ function SemanticInventory() {
     const showFlipCamera = Boolean(cameraStream) && !cameraCapture && !cameraLoading && !cameraSwitching;
     const previewStyle = compact ? m.cameraPreview : d.cameraPreview;
     const selectStyle = compact ? m.inp : d.sel;
-    const buttonStyle = compact ? m.btn : d.btn;
-    const panelStyle = compact ? m.addForm : { ...d.form, gap:12, maxWidth:760 };
+    const styles = compact ? m : d;
+    const panelStyle = compact ? { ...m.voicePanel, animation: "none" } : { ...d.voicePanel, animation: "none" };
     const cameraStatusLabel = cameraMode === "checking"
       ? "Checking camera support..."
-      : cameraAvailable
-        ? "Open the camera, capture an image, then send it to CV."
-        : "This build cannot grant WebView camera access.";
-    const cameraSupportHint = cameraAvailable
-      ? "Use a physical device or simulator with camera support enabled."
-      : "Rebuild the native app after permission changes. Expo Go will not show the WebView camera permission prompt.";
+      : cameraStream
+        ? "Camera active — capture when ready"
+        : cameraAvailable
+          ? "Open the camera, capture an image, then send it to CV."
+          : "This build cannot grant WebView camera access.";
 
     return (
-      <div className="glass" style={panelStyle}>
-        <div style={compact ? m.secLabel : d.secLbl}>CAMERA SCAN</div>
-        <div className="glass-card" style={{
-          borderRadius:12,
-          padding: compact ? 14 : 16,
-          display:"flex",
-          flexDirection:"column",
-          gap:12,
-          minHeight: compact ? "calc(100vh - 260px)" : 560,
-        }}>
+      <div style={panelStyle}>
+        {/* Header with badge */}
+        <div style={styles.voiceHeader}>
+          <div style={styles.voiceBadge}>
+            {renderCameraMark(compact)}
+            <span>Camera</span>
+          </div>
+          <div style={styles.voiceHint}>{cameraAvailable ? "Live capture" : "Unavailable"}</div>
+        </div>
+
+        {/* Location composer */}
+        <div style={styles.voiceComposer}>
           <div style={compact ? m.cameraGrid : d.cameraGrid}>
             <select
               className="glass-input"
@@ -2790,24 +2929,38 @@ function SemanticInventory() {
             </select>
           </div>
 
-          <div style={{ display:"flex", flexDirection:"column", gap:4 }}>
-            <div style={{ fontSize:13, color:"#e2e8f0" }}>{cameraStatusLabel}</div>
-            <div style={{ fontSize:11, color: cameraAvailable ? "#67e8f9" : "#94a3b8", lineHeight:1.5 }}>
-              {cameraSupportHint}
-            </div>
+          <div style={styles.voiceMetaRow}>
+            <span style={styles.voiceMetaText}>{cameraStatusLabel}</span>
+            {!cameraCapture && !cameraStream && (
+              <button
+                style={styles.voiceSendBtn(cameraLoading || !cameraReady)}
+                onClick={() => handleOpenCamera()}
+                disabled={cameraLoading || !cameraReady}
+              >
+                Open Camera
+              </button>
+            )}
+            {cameraCapture && (
+              <button
+                style={styles.voiceSendBtn(cameraLoading)}
+                onClick={handleRetake}
+                disabled={cameraLoading}
+              >
+                Retake
+              </button>
+            )}
           </div>
+        </div>
 
-          {!cameraCapture && (
-            <button
-              className="glass-btn"
-              style={buttonStyle("primary", cameraLoading || !cameraReady)}
-              onClick={() => handleOpenCamera()}
-              disabled={cameraLoading || !cameraReady}
-            >
-              Open Camera
-            </button>
-          )}
+        {/* Camera error */}
+        {cameraError && (
+          <div style={styles.voiceError}>
+            {cameraError}
+          </div>
+        )}
 
+        {/* Preview card */}
+        <div style={styles.voiceInfoCard}>
           <div style={previewStyle}>
             {!cameraCapture ? (
               cameraStream ? (
@@ -2838,7 +2991,10 @@ function SemanticInventory() {
                 <div style={compact ? m.cameraTransitionFill : d.cameraTransitionFill} />
               ) : (
                 <div style={compact ? m.cameraPlaceholder : d.cameraPlaceholder}>
-                  Room and box labels are applied to every detected item from this scan.
+                  <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 10 }}>
+                    <div style={{ transform: "scale(1.8)", opacity: 0.6 }}>{renderCameraMark(compact)}</div>
+                    <div style={{ fontSize: 12, color: "#94a3b8", fontFamily: INPUT_FF, textAlign: "center" }}>Room and box labels are applied to every detected item from this scan.</div>
+                  </div>
                 </div>
               )
             ) : (
@@ -2850,53 +3006,93 @@ function SemanticInventory() {
             )}
           </div>
 
+          {/* Info text */}
+          <div style={styles.voiceInfoBody}>
+            {cameraAvailable
+              ? "Point at items you want to catalog. The AI will detect and suggest item names automatically."
+              : "Camera requires a development build. Expo Go and browser previews have limited camera access."}
+          </div>
+
+          {/* Camera status warning */}
+          {!cameraReady && cameraMode !== "checking" && (
+            <div style={styles.voiceWarning}>
+              Camera permissions are required. Rebuild the native app if permissions were recently changed.
+            </div>
+          )}
+
+          {/* Capture indicator when active */}
+          {(cameraStream || cameraSwitching) && !cameraCapture && (
+            <div>
+              <div style={styles.voiceMeterHeader}>
+                <span>Camera status</span>
+                <span>{cameraSwitching ? "Switching..." : "Live preview active"}</span>
+              </div>
+              <div style={styles.voiceMeterTrack}>
+                <div style={{
+                  ...styles.voiceMeterFill(true),
+                  width: cameraSwitching ? "60%" : "100%",
+                }} />
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* Debug card */}
+        <div style={styles.voiceDebugCard}>
+          <div style={styles.voiceDebugLabel}>Camera Debug</div>
+          <div style={styles.voiceDebugGrid}>
+            <div style={styles.voiceDebugStat}>Mode: <span style={styles.voiceDebugStatValue}>{cameraMode}</span></div>
+            <div style={styles.voiceDebugStat}>Available: <span style={styles.voiceDebugStatValue}>{cameraAvailable ? "yes" : "no"}</span></div>
+            <div style={styles.voiceDebugStat}>Facing: <span style={styles.voiceDebugStatValue}>{cameraFacing}</span></div>
+          </div>
+        </div>
+
+        {/* Capture button wrapper */}
+        <div style={styles.voiceMicWrap}>
           {!cameraCapture && (cameraStream || cameraSwitching) && (
             <button
-              className="glass-btn glow-cyan"
-              style={buttonStyle("primary", !canCapture || cameraSwitching)}
+              className={cameraSwitching ? "" : "glow-active"}
+              style={{
+                ...styles.voiceMicBtn(cameraSwitching ? "recording" : "idle", !canCapture || cameraSwitching),
+                width: compact ? 96 : 112,
+                height: compact ? 96 : 112,
+                minWidth: compact ? 96 : 112,
+                minHeight: compact ? 96 : 112,
+              }}
               onClick={handleCapture}
               disabled={!canCapture || cameraSwitching}
             >
-              {cameraSwitching ? "Switching..." : "Capture"}
-            </button>
-          )}
-
-          {cameraCapture && (
-            <div style={compact ? m.cameraActionRow : d.cameraActionRow}>
-              <button
-                className="glass-btn-secondary"
-                style={{ ...(compact ? m.cameraActionBtn : d.cameraActionBtn), ...buttonStyle("default", cameraLoading) }}
-                onClick={handleRetake}
-                disabled={cameraLoading}
-              >
-                Retake
-              </button>
-              {cameraLoading && (
-                <div style={compact ? m.cameraLoading : d.cameraLoading}>
-                  <div className="spin" />
-                  <span>Sending to CV API...</span>
+              {cameraSwitching ? (
+                <div className="spin" />
+              ) : (
+                <div style={{ transform: "scale(2.5)", display: "flex", alignItems: "center", justifyContent: "center" }}>
+                  {renderCameraMark(compact)}
                 </div>
               )}
+            </button>
+          )}
+          {cameraCapture && cameraLoading && (
+            <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 10 }}>
+              <div className="spin" style={{ width: 40, height: 40 }} />
+              <div style={{ fontSize: 11, color: "#8b949e", fontFamily: INPUT_FF }}>Sending to CV API...</div>
             </div>
           )}
-
-          {cameraError && (
-            <div className="glass" style={compact ? m.cameraError : d.cameraError}>
-              <span>{cameraError}</span>
-              <button
-                className="glass-btn-secondary"
-                style={compact ? m.cameraInlineBtn : d.cameraInlineBtn}
-                onClick={handleRetake}
-                disabled={cameraLoading}
-              >
-                Retake
-              </button>
-            </div>
-          )}
+          <div style={styles.voiceMicLabel}>
+            {cameraCapture
+              ? cameraLoading
+                ? "Processing..."
+                : "Review detected items above"
+              : cameraSwitching
+                ? "Switching camera..."
+                : cameraStream
+                  ? "Tap to capture"
+                  : "Open camera to start"}
+          </div>
         </div>
       </div>
     );
   };
+
 
   const renderMobileNavIcon = (tabKey, active) => {
     const common = {
@@ -3214,7 +3410,7 @@ function SemanticInventory() {
 
           {/* ── Review tab ── */}
           {activeTab === "review" && (
-            renderReviewPanel()
+            renderReviewPanel(true)
           )}
 
           {/* ── Settings tab ── */}
