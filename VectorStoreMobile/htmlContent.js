@@ -3048,7 +3048,7 @@ function SemanticInventory() {
         </div>
 
         {/* Capture button wrapper */}
-        <div style={styles.voiceMicWrap}>
+        <div style={compact && !cameraCapture && (cameraStream || cameraSwitching) ? m.cameraFloatingCaptureWrap : styles.voiceMicWrap}>
           {!cameraCapture && (cameraStream || cameraSwitching) && (
             <button
               className={cameraSwitching ? "" : "glow-active"}
@@ -3077,7 +3077,7 @@ function SemanticInventory() {
               <div style={{ fontSize: 11, color: "#8b949e", fontFamily: INPUT_FF }}>Sending to CV API...</div>
             </div>
           )}
-          <div style={styles.voiceMicLabel}>
+          <div style={compact && !cameraCapture && (cameraStream || cameraSwitching) ? m.cameraFloatingCaptureLabel : styles.voiceMicLabel}>
             {cameraCapture
               ? cameraLoading
                 ? "Processing..."
@@ -4385,15 +4385,17 @@ const m = {
   voiceDebugEvent:{ color:"#93c5fd" },
   voiceMicWrap:{ marginTop:"auto", display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center", gap:10, paddingTop:4 },
   voiceMicBtn:(status, disabled) => ({
-               width:96, height:96, minWidth:96, minHeight:96, borderRadius:"50%",
-               border:"1px solid rgba(255, 255, 255, 0.08)",
-               background: status === "recording" ? "linear-gradient(135deg, rgba(59, 130, 246, 0.95), rgba(192, 132, 252, 0.92))" : "rgba(67, 72, 75, 0.95)",
-               color:"#f8fafc", cursor: disabled ? "not-allowed" : "pointer", opacity: disabled ? 0.45 : 1,
-               animation: status === "recording" ? "pulse 1s ease-in-out infinite" : "none",
-               touchAction:"manipulation", display:"flex", alignItems:"center", justifyContent:"center",
-               boxShadow: status === "recording" ? "0 0 24px rgba(96, 165, 250, 0.35)" : "0 12px 32px rgba(2, 6, 23, 0.24)" }),
+             width:96, height:96, minWidth:96, minHeight:96, borderRadius:"50%",
+             border:"1px solid rgba(255, 255, 255, 0.08)",
+             background: status === "recording" ? "linear-gradient(135deg, rgba(59, 130, 246, 0.95), rgba(192, 132, 252, 0.92))" : "rgba(67, 72, 75, 0.95)",
+             color:"#f8fafc", cursor: disabled ? "not-allowed" : "pointer", opacity: disabled ? 0.45 : 1,
+             animation: status === "recording" ? "pulse 1s ease-in-out infinite" : "none",
+             touchAction:"manipulation", display:"flex", alignItems:"center", justifyContent:"center",
+             boxShadow: status === "recording" ? "0 0 24px rgba(96, 165, 250, 0.35)" : "0 12px 32px rgba(2, 6, 23, 0.24)" }),
   voiceMicIcon:{ transform:"scale(3.4)", display:"flex", alignItems:"center", justifyContent:"center" },
   voiceMicLabel:{ fontSize:11, color:"#8b949e", textAlign:"center", fontFamily:INPUT_FF },
+  cameraFloatingCaptureWrap:{ position:"fixed", left:"50%", bottom:"calc(env(safe-area-inset-bottom, 0px) + 104px)", transform:"translateX(-50%)", zIndex:80, display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center", gap:10 },
+  cameraFloatingCaptureLabel:{ fontSize:11, color:"#cbd5e1", textAlign:"center", fontFamily:INPUT_FF, padding:"7px 12px", borderRadius:999, background:"rgba(15, 23, 42, 0.88)", border:"1px solid rgba(148, 163, 184, 0.14)", boxShadow:"0 12px 28px rgba(2, 6, 23, 0.3)" },
   inp:     { width:"100%", borderRadius:8, padding:"11px 12px", color:"#e2e8f0", fontSize:TYPE.md, lineHeight:"1.35", fontFamily:INPUT_FF,
              boxSizing:"border-box", display:"block" },
   addForm: { display:"flex", flexDirection:"column", gap:10 },
