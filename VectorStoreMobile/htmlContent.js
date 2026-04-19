@@ -3,7 +3,7 @@ export const HTML = `<!DOCTYPE html>
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
-  <title>VectorBase - Semantic Inventory</title>
+  <title>VectorStore - Semantic Inventory</title>
   <style>
     @import url('https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500;600&display=swap');
     *, *::before, *::after { box-sizing: border-box; }
@@ -227,7 +227,7 @@ export const HTML = `<!DOCTYPE html>
   </div>
   <div id="loading">
     <div class="spinner"></div>
-    <div>Loading VectorBase...</div>
+    <div>Loading VectorStore...</div>
   </div>
   <div id="root"></div>
 
@@ -3217,7 +3217,7 @@ function SemanticInventory() {
         <div style={m.header}>
           <div style={m.logo}>{renderBrandMark(true)}</div>
           <div style={{ flex:1, minWidth:0 }}>
-            <div style={m.title}>VectorBase</div>
+            <div style={m.title}>VectorStore</div>
             <div style={m.subtitle}>SEMANTIC INVENTORY</div>
           </div>
           <div style={m.headerMeta}>
@@ -3957,7 +3957,7 @@ function SemanticInventory() {
       <div className="glass" style={d.header}>
         <div style={d.logo}>{renderBrandMark(false)}</div>
         <div>
-          <h1 style={d.h1}>VectorBase</h1>
+          <h1 style={d.h1}>VectorStore</h1>
           <p style={d.sub}>SEMANTIC INVENTORY · RAG-POWERED NEAREST-NEIGHBOR SEARCH</p>
         </div>
         <div className="glass" style={d.badge}>{inventory.length} items indexed</div>
