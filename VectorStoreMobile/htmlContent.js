@@ -3,7 +3,7 @@ export const HTML = `<!DOCTYPE html>
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
-  <title>VectorStock - Semantic Inventory</title>
+  <title>VectorBase - Semantic Inventory</title>
   <style>
     @import url('https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500;600&display=swap');
     *, *::before, *::after { box-sizing: border-box; }
@@ -193,6 +193,10 @@ export const HTML = `<!DOCTYPE html>
       80% { transform: translateX(3px); }
     }
     @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+    @keyframes dissolveOut {
+      from { opacity: 1; transform: translateY(0) scale(1); filter: blur(0); }
+      to { opacity: 0; transform: translateY(-6px) scale(0.985); filter: blur(6px); }
+    }
 
     input:focus, textarea:focus, select:focus {
       outline: none;
@@ -223,7 +227,7 @@ export const HTML = `<!DOCTYPE html>
   </div>
   <div id="loading">
     <div class="spinner"></div>
-    <div>Loading VectorStock...</div>
+    <div>Loading VectorBase...</div>
   </div>
   <div id="root"></div>
 
@@ -759,6 +763,7 @@ function SemanticInventory() {
     catch { return false; }
   });
   const [assistantReply, setAssistantReply] = useState(null);
+  const [assistantReplyPhase, setAssistantReplyPhase] = useState("hidden");
   const [activeTab,    setActiveTab]   = useState("inventory");
   const [notif,        setNotif]       = useState(null);
   const [error,        setError]       = useState(null);
@@ -778,6 +783,7 @@ function SemanticInventory() {
   const [clearRoomTarget, setClearRoomTarget] = useState("");
   const [importMode,     setImportMode]     = useState("merge");
   const [pendingDeleteId, setPendingDeleteId] = useState(null);
+  const [pendingDeleteChoiceId, setPendingDeleteChoiceId] = useState(null);
   const [reviewItems,     setReviewItems]     = useState([]);
   const cancelRef = useRef(false);
   const llmLoadingRef = useRef(false);
@@ -787,6 +793,7 @@ function SemanticInventory() {
   const desktopMainRef = useRef(null);
   const tabScrollPositionsRef = useRef({ mobile: {}, desktop: {} });
   const videoRef = useRef(null);
+  const deletePromptTimeoutRef = useRef(null);
   // Refs so window.vectorStoreAPI always holds the latest closure
   const embedAndStoreRef    = useRef(null);
   const handleDeleteRef     = useRef(null);
@@ -820,6 +827,45 @@ function SemanticInventory() {
     if (!ttsSupported || ttsEnabled) return;
     try { window.speechSynthesis.cancel(); } catch {}
   }, [ttsEnabled, ttsSupported]);
+
+  const clearPendingDeleteState = useCallback(() => {
+    if (deletePromptTimeoutRef.current) {
+      window.clearTimeout(deletePromptTimeoutRef.current);
+      deletePromptTimeoutRef.current = null;
+    }
+    setPendingDeleteId(null);
+    setPendingDeleteChoiceId(null);
+  }, []);
+
+  const armPendingDeleteTimeout = useCallback(() => {
+    if (deletePromptTimeoutRef.current) {
+      window.clearTimeout(deletePromptTimeoutRef.current);
+    }
+    deletePromptTimeoutRef.current = window.setTimeout(() => {
+      setPendingDeleteId(null);
+      setPendingDeleteChoiceId(null);
+      deletePromptTimeoutRef.current = null;
+    }, 4500);
+  }, []);
+
+  useEffect(() => {
+    if (!assistantReply) {
+      setAssistantReplyPhase("hidden");
+      return;
+    }
+
+    setAssistantReplyPhase("visible");
+    const dissolveTimer = window.setTimeout(() => setAssistantReplyPhase("dissolving"), 8800);
+    const clearTimer = window.setTimeout(() => {
+      setAssistantReply(null);
+      setAssistantReplyPhase("hidden");
+    }, 10000);
+
+    return () => {
+      window.clearTimeout(dissolveTimer);
+      window.clearTimeout(clearTimer);
+    };
+  }, [assistantReply]);
 
   const speakAssistantDialogue = useCallback((dialogue) => {
     const text = String(dialogue ?? "").trim();
@@ -1065,6 +1111,12 @@ function SemanticInventory() {
   useEffect(() => () => {
     stopCameraStream();
   }, [stopCameraStream]);
+
+  useEffect(() => () => {
+    if (deletePromptTimeoutRef.current) {
+      window.clearTimeout(deletePromptTimeoutRef.current);
+    }
+  }, []);
 
   // ── Initialize model ──────────────────────────────────────────────────────
   useEffect(() => {
@@ -1744,6 +1796,54 @@ function SemanticInventory() {
     }
   };
 
+  const handleDeleteCardAction = async (item, mode) => {
+    clearPendingDeleteState();
+    try {
+      if (mode === "all") {
+        await handleDeleteById(item.id);
+        return;
+      }
+
+      const currentQty = Number(normalizeLabel(item.qty));
+      if (!isFinite(currentQty) || currentQty <= 1) {
+        await handleDeleteById(item.id);
+        return;
+      }
+
+      const nextQty = String(currentQty - 1);
+      const storedItem = inventory.find(existing => existing.id === item.id) || item;
+      await addItem({ ...storedItem, qty: nextQty });
+      setInventory(prev => prev.map(existing => existing.id === item.id ? { ...existing, qty: nextQty } : existing));
+      setResults(prev => prev ? prev.map(existing => existing.id === item.id ? { ...existing, qty: nextQty } : existing) : prev);
+      toast(\`Removed 1 \${item.name}\`);
+    } catch (e) {
+      setError(\`Delete failed: \${String(e?.message ?? e)}\`);
+      toast("Delete failed.", "error");
+    }
+  };
+
+  const handleDeleteCardPrompt = (item) => {
+    const parsedQty = Number(normalizeLabel(item.qty));
+    const allowChoice = isFinite(parsedQty) && parsedQty > 1;
+
+    if (allowChoice) {
+      const isOpen = pendingDeleteChoiceId === item.id;
+      clearPendingDeleteState();
+      if (!isOpen) {
+        setPendingDeleteChoiceId(item.id);
+        armPendingDeleteTimeout();
+      }
+      return;
+    }
+
+    const isOpen = pendingDeleteId === item.id;
+    clearPendingDeleteState();
+    if (!isOpen) {
+      setPendingDeleteId(item.id);
+      armPendingDeleteTimeout();
+    }
+  };
+
   const handleClearAllData = async () => {
     try {
       await clearAll();
@@ -2182,78 +2282,153 @@ function SemanticInventory() {
   const ItemCard = ({ item }) => {
     const sc     = item.score;
     const colors = STATUS_COLORS[String(item.status ?? "")] ?? STATUS_COLORS["In Stock"];
+    const statusStyle = {
+      fontSize:11,
+      minHeight:30,
+      padding:"0 11px",
+      borderRadius:15,
+      fontWeight:600,
+      fontFamily:INPUT_FF,
+      display:"inline-flex",
+      alignItems:"center",
+      background: colors.bg,
+      color: colors.text,
+      border: \`1px solid \${colors.border}\`,
+      boxShadow: \`inset 0 1px 0 rgba(255, 255, 255, 0.04), 0 8px 18px \${colors.glow}\`,
+    };
+    const infoChipStyle = {
+      fontSize:11,
+      minHeight:30,
+      padding:"0 11px",
+      borderRadius:15,
+      display:"inline-flex",
+      alignItems:"center",
+      fontFamily:INPUT_FF,
+      border:"1px solid rgba(255, 255, 255, 0.06)",
+      background:"rgba(67, 72, 75, 0.62)",
+      color:"#cbd5e1",
+      boxShadow:"inset 0 1px 0 rgba(255, 255, 255, 0.03)",
+    };
+    const locationChipStyle = {
+      ...infoChipStyle,
+      background:"rgba(96, 165, 250, 0.12)",
+      border:"1px solid rgba(96, 165, 250, 0.18)",
+      color:"#bfdbfe",
+    };
+    const parsedQty = Number(normalizeLabel(item.qty));
+    const hasMultipleQty = isFinite(parsedQty) && parsedQty > 1;
+    const deletePending = pendingDeleteId === item.id;
+    const deleteChoiceOpen = pendingDeleteChoiceId === item.id;
+    const deleteBtnBase = {
+      minHeight:32,
+      cursor:"pointer",
+      lineHeight:1,
+      borderRadius:16,
+      transition:"all 0.15s ease",
+      whiteSpace:"nowrap",
+      fontFamily:INPUT_FF,
+      display:"inline-flex",
+      alignItems:"center",
+      justifyContent:"center",
+    };
     return (
-      <div className="glass-card" style={isMobile ? m.card : d.card}>
+      <div style={isMobile ? m.card : d.card}>
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={isMobile ? m.cName : d.cName}>{item.name}</div>
           {item.description && <div style={isMobile ? m.cDesc : d.cDesc}>{item.description}</div>}
-          <div style={{ display:"flex", gap:6, flexWrap:"wrap", alignItems:"center", marginTop:4 }}>
-            <span style={{
-              fontSize:11, padding:"4px 10px", borderRadius:20, fontWeight:600,
-              background: colors.bg, color: colors.text,
-              border: \`1px solid \${colors.border}\`,
-              boxShadow: \`0 0 12px \${colors.glow}\`
-            }}>
+          <div style={{ display:"flex", gap:7, flexWrap:"wrap", alignItems:"center", marginTop:8 }}>
+            <span style={statusStyle}>
               {item.status}
             </span>
             {(item.qty || item.unit) && (
-              <span style={{
-                fontSize:11, padding:"4px 10px", borderRadius:20,
-                background: "rgba(30, 41, 59, 0.5)", color:"#94a3b8",
-                border:"1px solid rgba(148, 163, 184, 0.15)"
-              }}>
+              <span style={infoChipStyle}>
                 {[item.qty, item.unit].filter(Boolean).join(" ")}
               </span>
             )}
             {(item.room || item.box) && (
-              <span style={{
-                fontSize:11, padding:"4px 10px", borderRadius:20,
-                background:"rgba(14, 165, 233, 0.12)", color:"#67e8f9",
-                border:"1px solid rgba(34, 211, 238, 0.25)"
-              }}>
+              <span style={locationChipStyle}>
                 {[item.room, item.box].filter(Boolean).join(" › ")}
               </span>
             )}
           </div>
           {sc !== undefined && isFinite(sc) && (
-            <div style={{ marginTop:8 }}>
-              <div style={{ height:3, background:"rgba(30, 41, 59, 0.5)", borderRadius:2, overflow:"hidden", marginBottom:3 }}>
+            <div style={{ marginTop:12 }}>
+              <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:6 }}>
+                <span style={{ fontSize:10, color:"#8b949e", letterSpacing:"0.5px", textTransform:"uppercase", fontFamily:INPUT_FF }}>
+                  Match
+                </span>
+                <span style={{ fontSize:11, color: matchColor(sc), fontFamily:INPUT_FF }}>
+                  {(sc*100).toFixed(1)}% {matchLabel(sc)}
+                </span>
+              </div>
+              <div style={{ height:5, background:"rgba(67, 72, 75, 0.48)", borderRadius:999, overflow:"hidden", marginBottom:2 }}>
                 <div style={{
                   height:"100%", width:\`\${Math.max(0,Math.min(100,sc*100)).toFixed(1)}%\`,
-                  background: sc>0.75 ? "linear-gradient(90deg,#22d3ee,#8b5cf6)" : sc>0.50 ? "linear-gradient(90deg,#6366f1,#a78bfa)" : "#475569",
+                  borderRadius:999,
+                  background: sc>0.75 ? "linear-gradient(90deg,#60a5fa,#c084fc)" : sc>0.50 ? "linear-gradient(90deg,#818cf8,#a78bfa)" : "#64748b",
                   transition:"width 0.4s ease",
-                  boxShadow: sc>0.5 ? "0 0 10px rgba(139, 92, 246, 0.5)" : "none"
+                  boxShadow: sc>0.5 ? "0 0 12px rgba(96, 165, 250, 0.28)" : "none"
                 }} />
               </div>
-              <span style={{ fontSize:11, color: matchColor(sc) }}>
-                {(sc*100).toFixed(1)}% {matchLabel(sc)}
-              </span>
             </div>
           )}
         </div>
-        <button
-          style={{
-            background: pendingDeleteId === item.id ? "rgba(248, 113, 113, 0.2)" : "rgba(30, 41, 59, 0.3)",
-            border: pendingDeleteId === item.id ? "1px solid rgba(248, 113, 113, 0.5)" : "1px solid rgba(148, 163, 184, 0.1)",
-            color: pendingDeleteId === item.id ? "#f87171" : "#64748b",
-            cursor:"pointer", fontSize: isMobile ? 20 : 14,
-            padding: pendingDeleteId === item.id ? "6px 10px" : "6px 8px",
-            flexShrink:0, lineHeight:1, borderRadius:6,
-            transition:"all 0.15s ease",
-            whiteSpace:"nowrap"
-          }}
-          onClick={() => {
-            if (pendingDeleteId === item.id) {
-              handleDelete(item.id);
-              setPendingDeleteId(null);
-            } else {
-              setPendingDeleteId(item.id);
-              window.setTimeout(() => setPendingDeleteId(p => p === item.id ? null : p), 3000);
-            }
-          }}
-          onMouseEnter={e => { if (pendingDeleteId !== item.id) { e.currentTarget.style.color="#f87171"; e.currentTarget.style.background="rgba(248, 113, 113, 0.15)"; }}}
-          onMouseLeave={e => { if (pendingDeleteId !== item.id) { e.currentTarget.style.color="#64748b"; e.currentTarget.style.background="rgba(30, 41, 59, 0.3)"; }}}
-        >{pendingDeleteId === item.id ? "Tap again to delete" : "✕"}</button>
+        {deleteChoiceOpen ? (
+          <div style={{ display:"flex", flexDirection:"column", gap:6, alignSelf:"flex-start", flexShrink:0 }}>
+            <button
+              style={{
+                ...deleteBtnBase,
+                padding:"0 10px",
+                background:"rgba(67, 72, 75, 0.72)",
+                border:"1px solid rgba(255, 255, 255, 0.06)",
+                color:"#f8fafc",
+                fontSize:11,
+                boxShadow:"inset 0 1px 0 rgba(255, 255, 255, 0.03)",
+              }}
+              onClick={() => handleDeleteCardAction(item, "one")}
+            >
+              Delete 1
+            </button>
+            <button
+              style={{
+                ...deleteBtnBase,
+                padding:"0 10px",
+                background:"rgba(127, 29, 29, 0.38)",
+                border:"1px solid rgba(248, 113, 113, 0.28)",
+                color:"#fecaca",
+                fontSize:11,
+                boxShadow:"0 10px 24px rgba(127, 29, 29, 0.16)",
+              }}
+              onClick={() => handleDeleteCardAction(item, "all")}
+            >
+              Delete all
+            </button>
+          </div>
+        ) : (
+          <button
+            style={{
+              ...deleteBtnBase,
+              alignSelf:"flex-start",
+              padding: deletePending ? "0 11px" : "0 10px",
+              background: deletePending ? "rgba(127, 29, 29, 0.38)" : "rgba(67, 72, 75, 0.62)",
+              border: deletePending ? "1px solid rgba(248, 113, 113, 0.34)" : "1px solid rgba(255, 255, 255, 0.06)",
+              color: deletePending ? "#fecaca" : "#8b949e",
+              fontSize: isMobile ? 18 : 13,
+              boxShadow: deletePending ? "0 10px 24px rgba(127, 29, 29, 0.18)" : "inset 0 1px 0 rgba(255, 255, 255, 0.03)",
+              flexShrink:0,
+            }}
+            onClick={() => {
+              if (deletePending) {
+                handleDelete(item.id);
+                clearPendingDeleteState();
+              } else {
+                handleDeleteCardPrompt(item);
+              }
+            }}
+            onMouseEnter={e => { if (!deletePending) { e.currentTarget.style.color="#f8fafc"; e.currentTarget.style.background="rgba(87, 92, 95, 0.72)"; }}}
+            onMouseLeave={e => { if (!deletePending) { e.currentTarget.style.color="#8b949e"; e.currentTarget.style.background="rgba(67, 72, 75, 0.62)"; }}}
+          >{hasMultipleQty ? "×" : deletePending ? "Delete" : "×"}</button>
+        )}
       </div>
     );
   };
@@ -2306,27 +2481,29 @@ function SemanticInventory() {
 
   const AssistantReplyCard = ({ compact = false }) => assistantReply ? (
     <div
-      className="glass"
       style={{
-        ...(compact ? m.banner : d.banner),
-        flexDirection: "column",
-        alignItems: "stretch",
-        gap: 8,
+        ...(compact ? m.assistantCard : d.assistantCard),
+        animation: assistantReplyPhase === "dissolving"
+          ? "dissolveOut 1.2s ease forwards"
+          : "fadeIn 0.22s ease",
       }}
     >
-      <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", gap:12, flexWrap:"wrap" }}>
-        <div style={{ fontSize:11, color:"#94a3b8", letterSpacing:"0.8px" }}>ASSISTANT REPLY</div>
-        <div style={{ display:"flex", gap:8, flexWrap:"wrap", fontSize:10 }}>
-          <span style={{ color:"#94a3b8" }}>{assistantReplySourceLabel}</span>
-          <span style={{ color: assistantReplyIntentTone, textTransform:"uppercase", letterSpacing:"0.8px" }}>
+      <div style={compact ? m.assistantCardHeader : d.assistantCardHeader}>
+        <div style={compact ? m.assistantBadge : d.assistantBadge}>
+          <div style={compact ? m.assistantBadgeDot : d.assistantBadgeDot} />
+          <span>Assistant</span>
+        </div>
+        <div style={compact ? m.assistantMeta : d.assistantMeta}>
+          <span>{assistantReplySourceLabel}</span>
+          <span style={{ color: assistantReplyIntentTone, textTransform:"uppercase" }}>
             {assistantReply.intent}
           </span>
         </div>
       </div>
-      <div style={{ fontSize:13, color:"#e2e8f0", lineHeight:1.6 }}>{assistantReply.dialogue}</div>
+      <div style={compact ? m.assistantBody : d.assistantBody}>{assistantReply.dialogue}</div>
       {assistantReply.rawText && (
-        <div style={{ fontSize:10, color:"#64748b", lineHeight:1.5 }}>
-          Request: "{assistantReply.rawText}"
+        <div style={compact ? m.assistantRequest : d.assistantRequest}>
+          {assistantReply.rawText}
         </div>
       )}
     </div>
@@ -2377,22 +2554,22 @@ function SemanticInventory() {
   const renderVoicePanel = (compact = false) => {
     const commandReady = modelStatus === "ready";
     const micDisabled = !commandReady || !voiceSupportsMic || (voiceBusy && voiceStatus !== "recording");
+    const styles = compact ? m : d;
+    const panelStyle = compact ? { ...m.voicePanel, animation: voiceShake ? "shakeX 0.3s ease" : "none" } : { ...d.voicePanel, animation: voiceShake ? "shakeX 0.3s ease" : "none" };
 
     return (
-      <div className="glass" style={compact ? m.addForm : { ...d.form, gap:12, maxWidth:760 }}>
-        <div style={compact ? m.secLabel : d.secLbl}>VOICE COMMANDS</div>
-        <div className="glass-card" style={{
-          borderRadius:12,
-          padding: compact ? 14 : 16,
-          display:"flex",
-          flexDirection:"column",
-          gap:12,
-          minHeight: compact ? "calc(100vh - 260px)" : 560,
-          animation: voiceShake ? "shakeX 0.3s ease" : "none",
-        }}>
+      <div style={panelStyle}>
+        <div style={styles.voiceHeader}>
+          <div style={styles.voiceBadge}>
+            {renderVoiceMark(compact)}
+            <span>Voice</span>
+          </div>
+          <div style={styles.voiceHint}>{voiceMode === "native" ? "Live mic" : "Typed backup"}</div>
+        </div>
+        <div style={styles.voiceComposer}>
           <textarea
             className="glass-input"
-            style={compact ? { ...m.inp, minHeight:96, resize:"vertical" } : { ...d.ta, minHeight:110 }}
+            style={styles.voiceInput}
             placeholder={'Try: "add a hammer to the garage" or "where is my hammer"'}
             value={voiceDraft}
             onChange={e => {
@@ -2402,130 +2579,84 @@ function SemanticInventory() {
             disabled={voiceStatus === "recording" || voiceStatus === "processing"}
           />
 
-          <div style={{ display:"flex", flexWrap:"wrap", gap:8 }}>
+          <div style={styles.voiceMetaRow}>
+            <span style={styles.voiceMetaText}>{voiceStatusLabel}</span>
             <button
-              className="glass-btn"
-              style={compact ? m.btn("primary", voiceBusy || !voiceDraft.trim() || !commandReady) : d.btn("primary", voiceBusy || !voiceDraft.trim() || !commandReady)}
+              style={styles.voiceSendBtn(voiceBusy || !voiceDraft.trim() || !commandReady)}
               onClick={handleVoiceTypedSubmit}
               disabled={voiceBusy || !voiceDraft.trim() || !commandReady}
             >
               Send Typed Command
             </button>
           </div>
+        </div>
 
-          {voiceError && <div style={{ fontSize:11, color:"#f87171" }}>{voiceError}</div>}
+        {voiceError && <div style={styles.voiceError}>{voiceError}</div>}
 
-          <div style={{
-            display:"flex",
-            flexDirection:"column",
-            gap:10,
-          }}>
-            <div style={{ fontSize:13, color:"#e2e8f0" }}>{voiceStatusLabel}</div>
-            <div style={{ fontSize:11, color: voiceSupportsMic ? "#67e8f9" : "#94a3b8", lineHeight:1.5 }}>
-              {voiceSupportsMic
-                ? "Press once to start recording. Press again to stop and auto-submit."
-                : "Expo Go and unsupported builds keep the typed fallback, but microphone recording is disabled."}
-            </div>
-            {!commandReady && (
-              <div style={{ fontSize:11, color:"#fbbf24" }}>
-                The embedding model is still loading. Voice commands unlock once initialization completes.
-              </div>
-            )}
-            {voiceSupportsMic && (
-              <div>
-                <div style={{ display:"flex", justifyContent:"space-between", fontSize:10, color:"#64748b", marginBottom:4 }}>
-                  <span>Mic input</span>
-                  <span>{voiceStatus === "recording" ? (voiceMeterLevel > 0.08 ? "Hearing audio" : "Waiting for speech") : "Idle"}</span>
-                </div>
-                <div style={{ height:6, borderRadius:999, overflow:"hidden", background:"rgba(30, 41, 59, 0.55)" }}>
-                  <div style={{
-                    height:"100%",
-                    width:\`\${Math.max(8, voiceMeterLevel * 100)}%\`,
-                    background: voiceStatus === "recording"
-                      ? "linear-gradient(90deg, #22d3ee, #38bdf8, #60a5fa)"
-                      : "rgba(100, 116, 139, 0.45)",
-                    transition:"width 0.12s linear",
-                  }} />
-                </div>
-              </div>
-            )}
+        <div style={styles.voiceInfoCard}>
+          <div style={styles.voiceInfoBody}>
+            {voiceSupportsMic
+              ? "Press once to start recording. Press again to stop and auto-submit."
+              : "Expo Go and unsupported builds keep the typed fallback, but microphone recording is disabled."}
           </div>
+          {!commandReady && (
+            <div style={styles.voiceWarning}>
+              The embedding model is still loading. Voice commands unlock once initialization completes.
+            </div>
+          )}
+          {voiceSupportsMic && (
+            <div>
+              <div style={styles.voiceMeterHeader}>
+                <span>Mic input</span>
+                <span>{voiceStatus === "recording" ? (voiceMeterLevel > 0.08 ? "Hearing audio" : "Waiting for speech") : "Idle"}</span>
+              </div>
+              <div style={styles.voiceMeterTrack}>
+                <div style={{
+                  ...styles.voiceMeterFill(voiceStatus === "recording"),
+                  width:\`\${Math.max(8, voiceMeterLevel * 100)}%\`,
+                }} />
+              </div>
+            </div>
+          )}
+        </div>
 
-          <div style={{
-            borderTop:"1px solid rgba(148, 163, 184, 0.12)",
-            paddingTop:10,
-            display:"flex",
-            flexDirection:"column",
-            gap:6,
-          }}>
-            <div style={{ fontSize:10, color:"#94a3b8", letterSpacing:"0.8px" }}>VOICE DEBUG</div>
-            <div style={{ display:"grid", gridTemplateColumns:"repeat(3, minmax(0, 1fr))", gap:6, fontSize:10 }}>
-              <div style={{ color:"#94a3b8" }}>Mode: <span style={{ color:"#e2e8f0" }}>{voiceMode}</span></div>
-              <div style={{ color:"#94a3b8" }}>Status: <span style={{ color:"#e2e8f0" }}>{voiceStatus}</span></div>
-              <div style={{ color:"#94a3b8" }}>Level: <span style={{ color:"#e2e8f0" }}>{voiceLevel.toFixed(1)}</span></div>
-            </div>
-            <div style={{
-              maxHeight:120,
-              overflowY:"auto",
-              borderRadius:8,
-              padding:"8px 10px",
-              background:"rgba(15, 23, 42, 0.45)",
-              border:"1px solid rgba(148, 163, 184, 0.12)",
-              fontSize:10,
-              color:"#cbd5e1",
-              lineHeight:1.5,
-            }}>
-              {voiceDebugEvents.length === 0
-                ? "No native voice events received yet."
-                : voiceDebugEvents.map(entry => (
-                  <div key={entry.id}>
-                    <span style={{ color:"#67e8f9" }}>{entry.event}</span>
-                    {entry.detail ? ": " + entry.detail : ""}
-                  </div>
-                ))}
-            </div>
+        <div style={styles.voiceDebugCard}>
+          <div style={styles.voiceDebugLabel}>Voice Debug</div>
+          <div style={styles.voiceDebugGrid}>
+            <div style={styles.voiceDebugStat}>Mode: <span style={styles.voiceDebugStatValue}>{voiceMode}</span></div>
+            <div style={styles.voiceDebugStat}>Status: <span style={styles.voiceDebugStatValue}>{voiceStatus}</span></div>
+            <div style={styles.voiceDebugStat}>Level: <span style={styles.voiceDebugStatValue}>{voiceLevel.toFixed(1)}</span></div>
           </div>
+          <div style={styles.voiceDebugLog}>
+            {voiceDebugEvents.length === 0
+              ? "No native voice events received yet."
+              : voiceDebugEvents.map(entry => (
+                <div key={entry.id}>
+                  <span style={styles.voiceDebugEvent}>{entry.event}</span>
+                  {entry.detail ? ": " + entry.detail : ""}
+                </div>
+              ))}
+          </div>
+        </div>
 
-          <div style={{
-            marginTop:"auto",
-            display:"flex",
-            flexDirection:"column",
-            alignItems:"center",
-            justifyContent:"center",
-            gap:10,
-            paddingTop:10,
-          }}>
-            <button
-              className={voiceStatus === "recording" ? "glow-active" : ""}
-              style={{
-                width: compact ? 96 : 112,
-                height: compact ? 96 : 112,
-                minWidth: compact ? 96 : 112,
-                minHeight: compact ? 96 : 112,
-                borderRadius:"50%",
-                border:"1px solid rgba(148, 163, 184, 0.22)",
-                background: voiceStatus === "recording"
-                  ? "linear-gradient(135deg, rgba(239, 68, 68, 0.95), rgba(59, 130, 246, 0.92))"
-                  : "rgba(15, 23, 42, 0.82)",
-                color:"#f8fafc",
-                fontSize: compact ? 34 : 40,
-                cursor: micDisabled ? "not-allowed" : "pointer",
-                opacity: micDisabled ? 0.45 : 1,
-                animation: voiceStatus === "recording" ? "pulse 1s ease-in-out infinite" : "none",
-                touchAction:"manipulation",
-                boxShadow: voiceStatus === "recording"
-                  ? "0 0 24px rgba(59, 130, 246, 0.35)"
-                  : "0 12px 32px rgba(0, 0, 0, 0.24)",
-              }}
-              onPointerUp={handleVoiceTogglePress}
-              disabled={micDisabled}
-              title={voiceSupportsMic ? "Toggle microphone recording" : "Voice not supported on this build"}
-            >
-              {voiceStatus === "processing" ? "⟳" : "🎙️"}
-            </button>
-            <div style={{ fontSize:11, color:"#94a3b8", textAlign:"center" }}>
-              {voiceStatus === "recording" ? "Tap to stop and submit" : "Tap to start recording"}
-            </div>
+        <div style={styles.voiceMicWrap}>
+          <button
+            className={voiceStatus === "recording" ? "glow-active" : ""}
+            style={styles.voiceMicBtn(voiceStatus, micDisabled)}
+            onPointerUp={handleVoiceTogglePress}
+            disabled={micDisabled}
+            title={voiceSupportsMic ? "Toggle microphone recording" : "Voice not supported on this build"}
+          >
+            {voiceStatus === "processing"
+              ? <div className="spin" />
+              : (
+                <div style={styles.voiceMicIcon}>
+                  {renderVoiceMark(compact)}
+                </div>
+              )}
+          </button>
+          <div style={styles.voiceMicLabel}>
+            {voiceStatus === "recording" ? "Tap to stop and submit" : "Tap to start recording"}
           </div>
         </div>
       </div>
@@ -2767,19 +2898,138 @@ function SemanticInventory() {
     );
   };
 
+  const renderMobileNavIcon = (tabKey, active) => {
+    const common = {
+      width: 21,
+      height: 21,
+      viewBox: "0 0 24 24",
+      fill: "none",
+      stroke: active ? "#f8fafc" : "#8b949e",
+      strokeWidth: 2,
+      strokeLinecap: "round",
+      strokeLinejoin: "round",
+      style: m.navSvg(active),
+      "aria-hidden": "true",
+    };
+
+    switch (tabKey) {
+      case "inventory":
+        return (
+          <svg {...common}>
+            <path d="M3 10.5 12 3l9 7.5" />
+            <path d="M5.5 9.5V20h13V9.5" />
+            <path d="M10 20v-6h4v6" />
+          </svg>
+        );
+      case "search":
+        return (
+          <svg {...common}>
+            <circle cx="11" cy="11" r="6.5" />
+            <path d="m16 16 4 4" />
+          </svg>
+        );
+      case "voice":
+        return (
+          <svg {...common}>
+            <path d="M12 15a3.5 3.5 0 0 0 3.5-3.5v-3a3.5 3.5 0 1 0-7 0v3A3.5 3.5 0 0 0 12 15Z" />
+            <path d="M6.5 11.5a5.5 5.5 0 0 0 11 0" />
+            <path d="M12 17v3" />
+          </svg>
+        );
+      case "camera":
+        return (
+          <svg {...common}>
+            <path d="M4.5 8.5h3l1.5-2h6l1.5 2h3a1.5 1.5 0 0 1 1.5 1.5v8a1.5 1.5 0 0 1-1.5 1.5h-15A1.5 1.5 0 0 1 3 18v-8A1.5 1.5 0 0 1 4.5 8.5Z" />
+            <circle cx="12" cy="14" r="3.5" />
+          </svg>
+        );
+      case "settings":
+        return (
+          <svg {...common}>
+            <circle cx="12" cy="12" r="2.5" />
+            <path d="M19 12a7 7 0 0 0-.08-1l2.02-1.57-2-3.46-2.4.77a7.28 7.28 0 0 0-1.73-1L14.5 3h-5l-.31 2.74a7.28 7.28 0 0 0-1.73 1l-2.4-.77-2 3.46L5.08 11A7 7 0 0 0 5 12c0 .34.03.67.08 1l-2.02 1.57 2 3.46 2.4-.77c.53.43 1.11.77 1.73 1L9.5 21h5l.31-2.74c.62-.23 1.2-.57 1.73-1l2.4.77 2-3.46L18.92 13c.05-.33.08-.66.08-1Z" />
+          </svg>
+        );
+      case "add":
+        return (
+          <svg {...common}>
+            <path d="M12 5v14" />
+            <path d="M5 12h14" />
+          </svg>
+        );
+      default:
+        return null;
+    }
+  };
+
+  const renderBrandMark = (compact = false) => (
+    <svg
+      width={compact ? 20 : 22}
+      height={compact ? 20 : 22}
+      viewBox="0 0 24 24"
+      fill="none"
+      aria-hidden="true"
+    >
+      <rect x="4" y="4" width="7" height="7" rx="2.2" stroke="#f8fafc" strokeWidth="1.9" />
+      <rect x="13" y="4" width="7" height="7" rx="2.2" stroke="#94a3b8" strokeWidth="1.9" />
+      <rect x="4" y="13" width="7" height="7" rx="2.2" stroke="#60a5fa" strokeWidth="1.9" />
+      <rect x="13" y="13" width="7" height="7" rx="2.2" stroke="#f8fafc" strokeWidth="1.9" />
+    </svg>
+  );
+
+  const renderSearchMark = (compact = false) => (
+    <svg
+      width={compact ? 18 : 20}
+      height={compact ? 18 : 20}
+      viewBox="0 0 24 24"
+      fill="none"
+      aria-hidden="true"
+    >
+      <circle cx="11" cy="11" r="6.5" stroke="#f8fafc" strokeWidth="1.9" />
+      <path d="m16 16 4 4" stroke="#60a5fa" strokeWidth="1.9" strokeLinecap="round" />
+    </svg>
+  );
+
+  const renderVoiceMark = (compact = false) => (
+    <svg
+      width={compact ? 18 : 20}
+      height={compact ? 18 : 20}
+      viewBox="0 0 24 24"
+      fill="none"
+      aria-hidden="true"
+    >
+      <path d="M12 15a3.5 3.5 0 0 0 3.5-3.5v-3a3.5 3.5 0 1 0-7 0v3A3.5 3.5 0 0 0 12 15Z" stroke="#f8fafc" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" />
+      <path d="M6.5 11.5a5.5 5.5 0 0 0 11 0" stroke="#60a5fa" strokeWidth="1.9" strokeLinecap="round" />
+      <path d="M12 17v3" stroke="#60a5fa" strokeWidth="1.9" strokeLinecap="round" />
+    </svg>
+  );
+
   // ── MOBILE layout ─────────────────────────────────────────────────────────
   if (isMobile) {
+    const mobileTabs = [
+      { key: "inventory", label: "Inventory" },
+      { key: "search",    label: "Search" },
+      { key: "voice",     label: "Voice" },
+      { key: "camera",    label: "Camera" },
+      { key: "settings",  label: "Settings" },
+      { key: "add",       label: "Add" },
+    ];
+
     return (
       <div style={m.root}>
         {/* Glass Header */}
-        <div className="glass" style={m.header}>
-          <div style={m.logo}>🔷</div>
-          <div style={{ flex:1 }}>
-            <div style={m.title}>VectorStock</div>
+        <div style={m.header}>
+          <div style={m.logo}>{renderBrandMark(true)}</div>
+          <div style={{ flex:1, minWidth:0 }}>
+            <div style={m.title}>VectorBase</div>
             <div style={m.subtitle}>SEMANTIC INVENTORY</div>
           </div>
-          <div className="glass" style={m.badge}>{inventory.length} items</div>
-          <div style={m.modelDot(modelStatus)} title={modelStatus} />
+          <div style={m.headerMeta}>
+            <div style={m.badge}>{inventory.length}</div>
+            <div style={m.headerStatus} title={modelStatus}>
+              <div style={m.modelDot(modelStatus)} />
+            </div>
+          </div>
         </div>
 
         {/* Progress banners */}
@@ -2877,47 +3127,74 @@ function SemanticInventory() {
           {/* ── Search tab ── */}
           {activeTab === "search" && (
             <>
-              <div className="glass" style={m.searchBox}>
-                <textarea
-                  className="glass-input"
-                  style={m.searchInput}
-                  rows={2}
-                  placeholder={\`Try: "something to clean dishes"\\n"tools for home repair"\`}
-                  value={searchQuery}
-                  onChange={e => setSearchQuery(e.target.value)}
-                  disabled={modelStatus !== "ready"}
-                />
-                <div style={{ display:"flex", gap:8, alignItems:"center" }}>
-                  <button
-                    className="glass-btn"
-                    style={{ ...m.btn("search"), flex:1 }}
-                    disabled={busy || !inventory.length || modelStatus !== "ready"}
-                    onClick={() => handleSearch()}
-                  >
-                    {loading.search ? "⟳ Searching…" : "⌕ Search"}
-                  </button>
+              <div style={m.searchBox}>
+                <div style={m.searchHeader}>
+                  <div style={m.searchBadge}>
+                    {renderSearchMark(true)}
+                    <span>Search</span>
+                  </div>
+                  <div style={m.searchHint}>Top {topK}</div>
+                </div>
+                <div style={m.searchCard}>
+                  <textarea
+                    className="glass-input"
+                    style={m.searchInput}
+                    rows={3}
+                    placeholder={\`Try: "something to clean dishes"\\n"tools for home repair"\`}
+                    value={searchQuery}
+                    onChange={e => setSearchQuery(e.target.value)}
+                    disabled={modelStatus !== "ready"}
+                  />
+                  <div style={m.searchMetaRow}>
+                    <span style={m.searchMetaText}>
+                      {inventory.length ? (inventory.length + " indexed items") : "Inventory is empty"}
+                    </span>
+                    <button
+                      style={m.searchActionBtn(busy || !inventory.length || modelStatus !== "ready")}
+                      disabled={busy || !inventory.length || modelStatus !== "ready"}
+                      onClick={() => handleSearch()}
+                    >
+                      {loading.search ? "Searching…" : "Run Search"}
+                    </button>
+                  </div>
                 </div>
               </div>
 
               {loading.search && (
-                <div style={{ display:"flex", alignItems:"center", gap:10, padding:"20px 16px", color:"#64748b", fontSize:12 }}>
-                  <div className="spin" />
-                  Computing similarity across {inventory.length} vectors…
+                <div style={m.searchStateCard}>
+                  <div style={m.searchStateHeader}>
+                    <div style={m.searchStateBadge}>
+                      <div className="spin" />
+                      <span>Searching</span>
+                    </div>
+                  </div>
+                  <div style={m.searchStateBody}>Computing similarity across {inventory.length} vectors…</div>
                 </div>
               )}
 
               {!loading.search && results !== null && results.length === 0 && (
-                <div style={m.empty}>
-                  <div style={{ fontSize:44, marginBottom:10 }}>🔍</div>
-                  <div style={{ color:"#64748b", fontSize:14 }}>No results found</div>
+                <div style={m.searchStateCard}>
+                  <div style={m.searchStateHeader}>
+                    <div style={m.searchStateBadge}>
+                      {renderSearchMark(true)}
+                      <span>No matches</span>
+                    </div>
+                  </div>
+                  <div style={m.searchStateBody}>No results found for this search.</div>
+                  <div style={m.searchStateSub}>Try broader wording or add a room or box hint.</div>
                 </div>
               )}
 
               {!loading.search && results === null && (
-                <div style={m.empty}>
-                  <div style={{ fontSize:44, marginBottom:10 }}>🔍</div>
-                  <div style={{ color:"#64748b", fontSize:14 }}>Search your inventory</div>
-                  <div style={{ color:"#475569", fontSize:12, marginTop:4 }}>Describe what you're looking for</div>
+                <div style={m.searchStateCard}>
+                  <div style={m.searchStateHeader}>
+                    <div style={m.searchStateBadge}>
+                      {renderSearchMark(true)}
+                      <span>Ready</span>
+                    </div>
+                  </div>
+                  <div style={m.searchStateBody}>Search your inventory</div>
+                  <div style={m.searchStateSub}>Describe what you are looking for in plain language.</div>
                 </div>
               )}
 
@@ -3285,26 +3562,27 @@ function SemanticInventory() {
           )}
         </div>
 
-        {/* Glass Bottom Navigation */}
-        <div className="glass-nav" style={m.nav}>
-          {[
-            { key: "inventory", icon: "📦", label: \`Inventory\` },
-            { key: "search",    icon: "🔍", label: "Search"    },
-            { key: "voice",     icon: "🎙️", label: "Voice"     },
-            { key: "camera",    icon: "📷", label: "Camera"    },
-            { key: "settings",  icon: "⚙️", label: "Settings"  },
-            { key: "add",       icon: "＋", label: "Add Item"  },
-          ].map(t => (
-            <button
-              key={t.key}
-              className={activeTab === t.key ? "glow-active" : ""}
-              style={m.navBtn(activeTab === t.key)}
-              onClick={() => setActiveTab(t.key)}
-            >
-              <span style={{ fontSize:20 }}>{t.icon}</span>
-              <span style={{ fontSize:10, marginTop:2 }}>{t.label}</span>
-            </button>
-          ))}
+        {/* Floating Bottom Navigation */}
+        <div style={m.navShell}>
+          <div style={m.nav}>
+            {mobileTabs.map(t => {
+              const isActive = activeTab === t.key;
+              return (
+                <button
+                  key={t.key}
+                  style={m.navBtn(isActive)}
+                  onClick={() => setActiveTab(t.key)}
+                  aria-label={t.label}
+                  title={t.label}
+                >
+                  <span style={m.navIcon(isActive)}>
+                    {renderMobileNavIcon(t.key, isActive)}
+                  </span>
+                  {isActive && <span style={m.navIndicator} />}
+                </button>
+              );
+            })}
+          </div>
         </div>
 
         {notif && <GlassToast notif={notif} />}
@@ -3316,9 +3594,9 @@ function SemanticInventory() {
   return (
     <div style={d.root}>
       <div className="glass" style={d.header}>
-        <div style={d.logo}>🔷</div>
+        <div style={d.logo}>{renderBrandMark(false)}</div>
         <div>
-          <h1 style={d.h1}>VectorStock</h1>
+          <h1 style={d.h1}>VectorBase</h1>
           <p style={d.sub}>SEMANTIC INVENTORY · RAG-POWERED NEAREST-NEIGHBOR SEARCH</p>
         </div>
         <div className="glass" style={d.badge}>{inventory.length} items indexed</div>
@@ -3395,28 +3673,36 @@ function SemanticInventory() {
 
           <div style={{ borderTop:"1px solid rgba(148, 163, 184, 0.1)" }} />
 
-          <div>
-            <div style={d.secLbl}>Semantic Search</div>
-            <div style={d.form}>
+          <div style={d.searchBox}>
+            <div style={d.searchHeader}>
+              <div style={d.searchBadge}>
+                {renderSearchMark(false)}
+                <span>Search</span>
+              </div>
+              <div style={d.searchHint}>Top {topK}</div>
+            </div>
+            <div style={d.searchCard}>
               <textarea
                 className="glass-input"
-                style={{ ...d.ta, minHeight:50 }}
+                style={d.searchInput}
                 placeholder={"Try:\\n\\"something to clean dishes\\"\\n\\"tools for home repair\\""}
                 value={searchQuery}
                 onChange={e => setSearchQuery(e.target.value)}
                 onKeyDown={e => { if (e.key==="Enter"&&!e.shiftKey) { e.preventDefault(); if (!busy&&inventory.length>0&&modelStatus==="ready") handleSearch(); }}}
                 disabled={modelStatus !== "ready"}
               />
-              <div style={{ display:"flex", alignItems:"center", gap:7, fontSize:11, color:"#64748b" }}>
-                <span>Top</span>
+              <div style={d.searchMetaRow}>
+                <span style={d.searchMetaText}>
+                  {inventory.length ? (inventory.length + " indexed items") : "Inventory is empty"}
+                </span>
                 <input type="number" min={1} max={Math.max(inventory.length,1)}
                   className="glass-input"
-                  style={{ ...d.inp, width:46, textAlign:"center", padding:"5px 6px" }}
+                  style={d.searchTopK}
                   value={topK} onChange={e => setTopK(Math.max(1,parseInt(e.target.value)||1))} disabled={modelStatus !== "ready"} />
-                <span>results</span>
+                <span style={d.searchMetaText}>results</span>
               </div>
-              <button className="glass-btn" style={d.btn("search", busy||!inventory.length||modelStatus!=="ready")} disabled={busy||!inventory.length||modelStatus!=="ready"} onClick={() => handleSearch()}>
-                {loading.search ? "⟳ Vectorizing…" : "⌕ Search Nearest Neighbors"}
+              <button style={d.searchActionBtn(busy||!inventory.length||modelStatus!=="ready")} disabled={busy||!inventory.length||modelStatus!=="ready"} onClick={() => handleSearch()}>
+                {loading.search ? "Searching…" : "Run Search"}
               </button>
             </div>
           </div>
@@ -3615,12 +3901,20 @@ const TYPE = { xs: 12, sm: 13, md: 14, lg: 16, xl: 20 };
 const m = {
   root:    { display:"flex", flexDirection:"column", height:"100%",
              color:"#e2e8f0", fontFamily:FF, overflow:"hidden" },
-  header:  { display:"flex", alignItems:"center", gap:10, padding:"14px 16px", flexShrink:0 },
-  logo:    { width:34, height:34, background:"linear-gradient(135deg,#22d3ee,#8b5cf6)",
-             borderRadius:8, display:"flex", alignItems:"center", justifyContent:"center", fontSize:16 },
-  title:   { fontSize:TYPE.lg, fontWeight:700, color:"#f1f5f9", letterSpacing:"-0.2px" },
-  subtitle:{ fontSize:TYPE.xs, color:"#94a3b8", letterSpacing:"0.8px" },
-  badge:   { borderRadius:20, padding:"4px 10px", fontSize:TYPE.xs, color:"#22d3ee" },
+  header:  { display:"flex", alignItems:"center", gap:10, margin:"10px 12px 0", padding:"8px 10px 8px 8px", flexShrink:0,
+             borderRadius:28, background:"rgba(23, 27, 32, 0.96)", border:"1px solid rgba(255, 255, 255, 0.06)",
+             backdropFilter:"blur(22px)", WebkitBackdropFilter:"blur(22px)",
+             boxShadow:"0 18px 40px rgba(2, 6, 23, 0.32), inset 0 1px 0 rgba(255, 255, 255, 0.03)" },
+  logo:    { width:42, height:42, background:"rgba(67, 72, 75, 0.95)",
+             borderRadius:18, display:"flex", alignItems:"center", justifyContent:"center", flexShrink:0 },
+  title:   { fontSize:15, fontWeight:700, color:"#f8fafc", letterSpacing:"-0.2px", lineHeight:1.1 },
+  subtitle:{ fontSize:10, color:"#8b949e", letterSpacing:"1.1px", marginTop:3 },
+  headerMeta:{ display:"flex", alignItems:"center", gap:7, flexShrink:0 },
+  badge:   { minWidth:34, height:34, padding:"0 10px", borderRadius:17, fontSize:12, color:"#f8fafc",
+             background:"rgba(67, 72, 75, 0.95)", display:"flex", alignItems:"center", justifyContent:"center",
+             fontWeight:600, fontFamily:INPUT_FF },
+  headerStatus:{ width:34, height:34, borderRadius:17, background:"rgba(67, 72, 75, 0.95)",
+                 display:"flex", alignItems:"center", justifyContent:"center" },
   modelDot:(s) => ({ width:8, height:8, borderRadius:"50%", flexShrink:0,
              background: s==="ready" ? "#34d399" : s==="loading" ? "#22d3ee" : s==="error" ? "#f87171" : "#64748b",
              boxShadow: s==="ready" ? "0 0 8px rgba(52, 211, 153, 0.6)" : s==="loading" ? "0 0 8px rgba(34, 211, 238, 0.6)" : "none" }),
@@ -3628,17 +3922,117 @@ const m = {
              padding:"12px 16px", flexShrink:0, borderRadius: "0 0 12px 12px" },
   error:   { background:"rgba(127, 29, 29, 0.6)", borderBottom:"1px solid rgba(248, 113, 113, 0.2)",
              padding:"10px 16px", fontSize:TYPE.sm, color:"#f87171", display:"flex", justifyContent:"space-between", flexShrink:0 },
+  assistantCard:{ margin:"12px 12px 0", padding:"12px", borderRadius:24, flexShrink:0,
+                  background:"rgba(23, 27, 32, 0.96)", border:"1px solid rgba(255, 255, 255, 0.06)",
+                  backdropFilter:"blur(22px)", WebkitBackdropFilter:"blur(22px)",
+                  boxShadow:"0 18px 40px rgba(2, 6, 23, 0.24), inset 0 1px 0 rgba(255, 255, 255, 0.03)" },
+  assistantCardHeader:{ display:"flex", justifyContent:"space-between", alignItems:"center", gap:10, marginBottom:10 },
+  assistantBadge:{ display:"inline-flex", alignItems:"center", gap:7, minHeight:34, padding:"0 12px",
+                   borderRadius:17, background:"rgba(67, 72, 75, 0.95)", color:"#f8fafc",
+                   fontSize:12, fontWeight:600, fontFamily:INPUT_FF },
+  assistantBadgeDot:{ width:7, height:7, borderRadius:"50%", background:"#60a5fa",
+                      boxShadow:"0 0 10px rgba(96, 165, 250, 0.5)" },
+  assistantMeta:{ display:"flex", alignItems:"center", gap:8, flexWrap:"wrap", fontSize:10,
+                  color:"#8b949e", letterSpacing:"0.7px" },
+  assistantBody:{ fontSize:13, color:"#f8fafc", lineHeight:1.6, fontFamily:INPUT_FF },
+  assistantRequest:{ marginTop:10, paddingTop:10, borderTop:"1px solid rgba(255, 255, 255, 0.06)",
+                     fontSize:11, color:"#8b949e", lineHeight:1.5, fontFamily:INPUT_FF,
+                     whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis" },
   content: { flex:1, minHeight:0, overflowY:"auto", padding:"12px 14px", display:"flex", flexDirection:"column", gap:10,
-             paddingBottom:20 },
-  card:    { borderRadius:12, padding:"14px", display:"flex", gap:10, alignItems:"flex-start" },
-  cName:   { fontSize:TYPE.lg, fontWeight:700, color:"#f1f5f9", marginBottom:3 },
-  cDesc:   { fontSize:TYPE.sm, color:"#94a3b8", lineHeight:1.55 },
+             paddingBottom:24 },
+  card:    { borderRadius:24, padding:"14px 14px 13px", display:"flex", gap:12, alignItems:"flex-start",
+             background:"rgba(23, 27, 32, 0.96)", border:"1px solid rgba(255, 255, 255, 0.06)",
+             backdropFilter:"blur(22px)", WebkitBackdropFilter:"blur(22px)",
+             boxShadow:"0 18px 40px rgba(2, 6, 23, 0.2), inset 0 1px 0 rgba(255, 255, 255, 0.03)" },
+  cName:   { fontSize:15, fontWeight:700, color:"#f8fafc", marginBottom:4, letterSpacing:"-0.2px", lineHeight:1.2, fontFamily:INPUT_FF },
+  cDesc:   { fontSize:12, color:"#8b949e", lineHeight:1.6, fontFamily:INPUT_FF },
   empty:   { display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center",
              flex:1, padding:40, textAlign:"center" },
-  searchBox:{ borderBottom:"1px solid rgba(148, 163, 184, 0.1)", padding:"12px 14px",
-              display:"flex", flexDirection:"column", gap:8, flexShrink:0, borderRadius: "0 0 12px 12px" },
-  searchInput:{ width:"100%", borderRadius:8, padding:"10px 12px", color:"#e2e8f0", fontSize:TYPE.lg, lineHeight:"1.35", fontFamily:INPUT_FF,
-                resize:"none", boxSizing:"border-box" },
+  searchBox:{ display:"flex", flexDirection:"column", gap:8, flexShrink:0 },
+  searchHeader:{ display:"flex", alignItems:"center", justifyContent:"space-between", gap:10, padding:"0 2px" },
+  searchBadge:{ display:"inline-flex", alignItems:"center", gap:8, minHeight:34, padding:"0 12px",
+                borderRadius:17, background:"rgba(67, 72, 75, 0.95)", color:"#f8fafc",
+                fontSize:12, fontWeight:600, fontFamily:INPUT_FF },
+  searchHint:{ minHeight:34, padding:"0 12px", borderRadius:17, display:"inline-flex", alignItems:"center",
+               background:"rgba(23, 27, 32, 0.9)", border:"1px solid rgba(255, 255, 255, 0.06)",
+               color:"#8b949e", fontSize:11, fontWeight:600, fontFamily:INPUT_FF },
+  searchCard:{ padding:"12px", borderRadius:24, background:"rgba(23, 27, 32, 0.96)",
+               border:"1px solid rgba(255, 255, 255, 0.06)", backdropFilter:"blur(22px)",
+               WebkitBackdropFilter:"blur(22px)", boxShadow:"0 18px 40px rgba(2, 6, 23, 0.2), inset 0 1px 0 rgba(255, 255, 255, 0.03)",
+               display:"flex", flexDirection:"column", gap:10 },
+  searchInput:{ width:"100%", minHeight:92, borderRadius:18, padding:"14px 15px", color:"#f8fafc", fontSize:15, lineHeight:"1.5", fontFamily:INPUT_FF,
+                resize:"none", boxSizing:"border-box", background:"rgba(67, 72, 75, 0.35)", border:"1px solid rgba(255, 255, 255, 0.06)" },
+  searchMetaRow:{ display:"flex", alignItems:"center", justifyContent:"space-between", gap:10 },
+  searchMetaText:{ color:"#8b949e", fontSize:11, fontFamily:INPUT_FF },
+  searchActionBtn:(disabled) => ({
+                minHeight:38, padding:"0 15px", borderRadius:19, border:"1px solid rgba(96, 165, 250, 0.18)",
+                background: disabled ? "rgba(67, 72, 75, 0.42)" : "rgba(67, 72, 75, 0.95)", color:"#f8fafc",
+                fontSize:12, fontWeight:600, fontFamily:INPUT_FF, cursor: disabled ? "not-allowed" : "pointer",
+                opacity: disabled ? 0.55 : 1, boxShadow: disabled ? "none" : "inset 0 1px 0 rgba(255, 255, 255, 0.04), 0 10px 22px rgba(2, 6, 23, 0.16)" }),
+  searchStateCard:{ padding:"14px 14px 13px", borderRadius:24, background:"rgba(23, 27, 32, 0.96)",
+                    border:"1px solid rgba(255, 255, 255, 0.06)", backdropFilter:"blur(22px)",
+                    WebkitBackdropFilter:"blur(22px)", boxShadow:"0 18px 40px rgba(2, 6, 23, 0.16), inset 0 1px 0 rgba(255, 255, 255, 0.03)" },
+  searchStateHeader:{ display:"flex", alignItems:"center", justifyContent:"space-between", gap:10, marginBottom:10 },
+  searchStateBadge:{ display:"inline-flex", alignItems:"center", gap:8, minHeight:34, padding:"0 12px",
+                     borderRadius:17, background:"rgba(67, 72, 75, 0.95)", color:"#f8fafc",
+                     fontSize:12, fontWeight:600, fontFamily:INPUT_FF },
+  searchStateBody:{ color:"#f8fafc", fontSize:14, lineHeight:1.5, fontFamily:INPUT_FF },
+  searchStateSub:{ marginTop:5, color:"#8b949e", fontSize:12, lineHeight:1.5, fontFamily:INPUT_FF },
+  voicePanel:{ display:"flex", flexDirection:"column", gap:10, minHeight:"calc(100vh - 260px)" },
+  voiceHeader:{ display:"flex", alignItems:"center", justifyContent:"space-between", gap:10, padding:"0 2px" },
+  voiceBadge:{ display:"inline-flex", alignItems:"center", gap:8, minHeight:34, padding:"0 12px",
+               borderRadius:17, background:"rgba(67, 72, 75, 0.95)", color:"#f8fafc",
+               fontSize:12, fontWeight:600, fontFamily:INPUT_FF },
+  voiceHint:{ minHeight:34, padding:"0 12px", borderRadius:17, display:"inline-flex", alignItems:"center",
+              background:"rgba(23, 27, 32, 0.9)", border:"1px solid rgba(255, 255, 255, 0.06)",
+              color:"#8b949e", fontSize:11, fontWeight:600, fontFamily:INPUT_FF },
+  voiceComposer:{ padding:"12px", borderRadius:24, background:"rgba(23, 27, 32, 0.96)",
+                  border:"1px solid rgba(255, 255, 255, 0.06)", backdropFilter:"blur(22px)",
+                  WebkitBackdropFilter:"blur(22px)", boxShadow:"0 18px 40px rgba(2, 6, 23, 0.2), inset 0 1px 0 rgba(255, 255, 255, 0.03)",
+                  display:"flex", flexDirection:"column", gap:10 },
+  voiceInput:{ width:"100%", minHeight:110, resize:"vertical", borderRadius:18, padding:"14px 15px",
+               boxSizing:"border-box", color:"#f8fafc", fontSize:15, lineHeight:"1.5", fontFamily:INPUT_FF,
+               background:"rgba(67, 72, 75, 0.35)", border:"1px solid rgba(255, 255, 255, 0.06)" },
+  voiceMetaRow:{ display:"flex", flexDirection:"column", gap:10 },
+  voiceMetaText:{ color:"#8b949e", fontSize:12, lineHeight:1.5, fontFamily:INPUT_FF },
+  voiceSendBtn:(disabled) => ({
+               minHeight:38, padding:"0 15px", borderRadius:19, border:"1px solid rgba(96, 165, 250, 0.18)",
+               background: disabled ? "rgba(67, 72, 75, 0.42)" : "rgba(67, 72, 75, 0.95)", color:"#f8fafc",
+               fontSize:12, fontWeight:600, fontFamily:INPUT_FF, cursor: disabled ? "not-allowed" : "pointer",
+               opacity: disabled ? 0.55 : 1, boxShadow: disabled ? "none" : "inset 0 1px 0 rgba(255, 255, 255, 0.04), 0 10px 22px rgba(2, 6, 23, 0.16)" }),
+  voiceError:{ padding:"11px 12px", borderRadius:18, color:"#fecaca", background:"rgba(127, 29, 29, 0.35)",
+               border:"1px solid rgba(248, 113, 113, 0.2)", fontSize:11, lineHeight:1.5, fontFamily:INPUT_FF },
+  voiceInfoCard:{ padding:"12px", borderRadius:24, background:"rgba(23, 27, 32, 0.96)",
+                  border:"1px solid rgba(255, 255, 255, 0.06)", display:"flex", flexDirection:"column", gap:10 },
+  voiceInfoBody:{ fontSize:12, color:"#cbd5e1", lineHeight:1.6, fontFamily:INPUT_FF },
+  voiceWarning:{ fontSize:11, color:"#fbbf24", lineHeight:1.5, fontFamily:INPUT_FF },
+  voiceMeterHeader:{ display:"flex", justifyContent:"space-between", fontSize:10, color:"#8b949e", marginBottom:5, fontFamily:INPUT_FF },
+  voiceMeterTrack:{ height:6, borderRadius:999, overflow:"hidden", background:"rgba(67, 72, 75, 0.48)" },
+  voiceMeterFill:(recording) => ({
+               height:"100%", borderRadius:999,
+               background: recording ? "linear-gradient(90deg, #60a5fa, #93c5fd, #c084fc)" : "rgba(100, 116, 139, 0.45)",
+               transition:"width 0.12s linear" }),
+  voiceDebugCard:{ padding:"12px", borderRadius:24, background:"rgba(23, 27, 32, 0.96)",
+                   border:"1px solid rgba(255, 255, 255, 0.06)", display:"flex", flexDirection:"column", gap:8 },
+  voiceDebugLabel:{ fontSize:10, color:"#8b949e", letterSpacing:"0.8px", textTransform:"uppercase", fontFamily:INPUT_FF },
+  voiceDebugGrid:{ display:"grid", gridTemplateColumns:"repeat(3, minmax(0, 1fr))", gap:6, fontSize:10, fontFamily:INPUT_FF },
+  voiceDebugStat:{ color:"#8b949e" },
+  voiceDebugStatValue:{ color:"#f8fafc" },
+  voiceDebugLog:{ maxHeight:120, overflowY:"auto", borderRadius:16, padding:"10px 12px",
+                  background:"rgba(67, 72, 75, 0.2)", border:"1px solid rgba(255, 255, 255, 0.06)",
+                  fontSize:10, color:"#cbd5e1", lineHeight:1.5, fontFamily:INPUT_FF },
+  voiceDebugEvent:{ color:"#93c5fd" },
+  voiceMicWrap:{ marginTop:"auto", display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center", gap:10, paddingTop:4 },
+  voiceMicBtn:(status, disabled) => ({
+               width:96, height:96, minWidth:96, minHeight:96, borderRadius:"50%",
+               border:"1px solid rgba(255, 255, 255, 0.08)",
+               background: status === "recording" ? "linear-gradient(135deg, rgba(59, 130, 246, 0.95), rgba(192, 132, 252, 0.92))" : "rgba(67, 72, 75, 0.95)",
+               color:"#f8fafc", cursor: disabled ? "not-allowed" : "pointer", opacity: disabled ? 0.45 : 1,
+               animation: status === "recording" ? "pulse 1s ease-in-out infinite" : "none",
+               touchAction:"manipulation", display:"flex", alignItems:"center", justifyContent:"center",
+               boxShadow: status === "recording" ? "0 0 24px rgba(96, 165, 250, 0.35)" : "0 12px 32px rgba(2, 6, 23, 0.24)" }),
+  voiceMicIcon:{ transform:"scale(3.4)", display:"flex", alignItems:"center", justifyContent:"center" },
+  voiceMicLabel:{ fontSize:11, color:"#8b949e", textAlign:"center", fontFamily:INPUT_FF },
   inp:     { width:"100%", borderRadius:8, padding:"11px 12px", color:"#e2e8f0", fontSize:TYPE.md, lineHeight:"1.35", fontFamily:INPUT_FF,
              boxSizing:"border-box", display:"block" },
   addForm: { display:"flex", flexDirection:"column", gap:10 },
@@ -3654,25 +4048,43 @@ const m = {
   cameraLoading:{ display:"flex", alignItems:"center", gap:10, color:"#94a3b8", fontSize:12 },
   cameraError:{ display:"flex", alignItems:"center", justifyContent:"space-between", gap:10, borderRadius:10, padding:"10px 12px", color:"#f87171", background:"rgba(127, 29, 29, 0.45)", border:"1px solid rgba(248, 113, 113, 0.2)", fontSize:12, lineHeight:1.5 },
   cameraInlineBtn:{ border:"1px solid rgba(248, 113, 113, 0.35)", background:"rgba(127, 29, 29, 0.1)", color:"#fecaca", borderRadius:8, padding:"8px 12px", fontSize:12, fontFamily:FF, cursor:"pointer", flexShrink:0 },
-  filterRow:{ display:"flex", flexWrap:"wrap", gap:8, padding:"2px 2px 8px" },
+  filterRow:{ display:"flex", flexWrap:"wrap", gap:9, padding:"4px 2px 10px" },
   filterPill:(a) => ({
-             padding:"6px 12px", borderRadius:999, border:"1px solid",
-             borderColor: a ? "rgba(34, 211, 238, 0.55)" : "rgba(148, 163, 184, 0.25)",
-             background: a ? "rgba(34, 211, 238, 0.18)" : "rgba(15, 23, 42, 0.6)",
-             color: a ? "#22d3ee" : "#94a3b8",
-             fontSize:TYPE.xs, fontFamily:FF, fontWeight:600, cursor:"pointer" }),
+             minHeight:36, padding:"0 13px", borderRadius:18, border:"1px solid",
+             borderColor: a ? "rgba(96, 165, 250, 0.18)" : "rgba(255, 255, 255, 0.06)",
+             background: a ? "rgba(67, 72, 75, 0.95)" : "rgba(23, 27, 32, 0.9)",
+             color: a ? "#f8fafc" : "#8b949e",
+             fontSize:TYPE.xs, fontFamily:INPUT_FF, fontWeight:600, cursor:"pointer",
+             boxShadow: a ? "inset 0 1px 0 rgba(255, 255, 255, 0.05), 0 10px 22px rgba(2, 6, 23, 0.16)" : "inset 0 1px 0 rgba(255, 255, 255, 0.02)",
+             transition:"all 0.18s ease" }),
   secLabel:{ fontSize:TYPE.xs, letterSpacing:"1.2px", color:"#94a3b8", textTransform:"uppercase", fontWeight:600 },
   btn:     (v, d) => ({
              width:"100%", padding:"13px", borderRadius:8, border:"none", cursor: d ? "not-allowed" : "pointer",
              fontSize:TYPE.md, fontFamily:FF, fontWeight:600, opacity: d ? 0.45 : 1,
              color:"#fff" }),
-  nav:     { display:"flex", flexShrink:0, paddingBottom: "env(safe-area-inset-bottom, 0px)" },
+  navShell:{ flexShrink:0, padding:"6px 12px calc(env(safe-area-inset-bottom, 0px) + 12px)",
+             background:"linear-gradient(180deg, rgba(15, 23, 42, 0) 0%, rgba(15, 23, 42, 0.3) 100%)" },
+  nav:     { display:"flex", alignItems:"center", justifyContent:"space-between", gap:5, padding:"8px",
+             borderRadius:28, background:"rgba(23, 27, 32, 0.96)", border:"1px solid rgba(255, 255, 255, 0.06)",
+             backdropFilter:"blur(22px)", WebkitBackdropFilter:"blur(22px)",
+             boxShadow:"0 18px 40px rgba(2, 6, 23, 0.38), inset 0 1px 0 rgba(255, 255, 255, 0.03)" },
   navBtn:  (a) => ({
-             flex:1, display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center",
-             padding:"12px 0", border:"none", background: "transparent",
-             color: a ? "#22d3ee" : "#64748b", cursor:"pointer", fontFamily:FF,
-             borderTop: a ? "2px solid #22d3ee" : "2px solid transparent",
-             transition:"all 0.2s ease" }),
+             position:"relative", width: a ? 64 : 42, minWidth: a ? 64 : 42, height: a ? 54 : 42, padding:0,
+             border:"none", borderRadius:22,
+             background: a ? "rgba(67, 72, 75, 0.95)" : "transparent",
+             color:"#f8fafc", cursor:"pointer", fontFamily:INPUT_FF, display:"flex", alignItems:"center", justifyContent:"center",
+             flex:"0 0 auto", boxShadow: a ? "inset 0 1px 0 rgba(255, 255, 255, 0.04)" : "none",
+             transition:"all 0.18s ease" }),
+  navIcon: (a) => ({
+             width:24, height:24, display:"flex", alignItems:"center", justifyContent:"center",
+             flexShrink:0 }),
+  navSvg:  (a) => ({
+             display:"block", color: a ? "#f8fafc" : "#8b949e",
+             transform: a ? "translateY(-2px)" : "none" }),
+  navIndicator:{ position:"absolute", left:"50%", bottom:6, width:22, height:5,
+                 transform:"translateX(-50%)", borderRadius:999,
+                 background:"linear-gradient(90deg, #3b82f6, #60a5fa)",
+                 boxShadow:"0 0 12px rgba(59, 130, 246, 0.45)" },
 };
 
 // ─── Desktop styles ───────────────────────────────────────────────────────────
@@ -3721,21 +4133,120 @@ const d = {
             color:"#fff" }),
   main:   { padding:"18px 22px", display:"flex", flexDirection:"column", gap:12, overflowY:"auto" },
   banner: { borderRadius:8, padding:"12px 16px", display:"flex", gap:10, alignItems:"center", marginBottom:4 },
+  searchBox:{ padding:"14px 16px", borderRadius:24, background:"rgba(23, 27, 32, 0.96)",
+              border:"1px solid rgba(255, 255, 255, 0.06)", backdropFilter:"blur(22px)",
+              WebkitBackdropFilter:"blur(22px)", boxShadow:"0 18px 40px rgba(2, 6, 23, 0.18), inset 0 1px 0 rgba(255, 255, 255, 0.03)",
+              display:"flex", flexDirection:"column", gap:12 },
+  searchHeader:{ display:"flex", alignItems:"center", justifyContent:"space-between", gap:12 },
+  searchBadge:{ display:"inline-flex", alignItems:"center", gap:8, minHeight:36, padding:"0 13px",
+                borderRadius:18, background:"rgba(67, 72, 75, 0.95)", color:"#f8fafc",
+                fontSize:12, fontWeight:600, fontFamily:INPUT_FF },
+  searchHint:{ minHeight:36, padding:"0 13px", borderRadius:18, display:"inline-flex", alignItems:"center",
+               background:"rgba(23, 27, 32, 0.9)", border:"1px solid rgba(255, 255, 255, 0.06)",
+               color:"#8b949e", fontSize:11, fontWeight:600, fontFamily:INPUT_FF },
+  searchCard:{ display:"flex", flexDirection:"column", gap:10 },
+  searchInput:{ width:"100%", minHeight:96, borderRadius:18, padding:"14px 15px", color:"#f8fafc", fontSize:15, lineHeight:"1.5",
+                boxSizing:"border-box", fontFamily:INPUT_FF, resize:"vertical", background:"rgba(67, 72, 75, 0.35)",
+                border:"1px solid rgba(255, 255, 255, 0.06)" },
+  searchMetaRow:{ display:"flex", alignItems:"center", gap:8, flexWrap:"wrap" },
+  searchMetaText:{ color:"#8b949e", fontSize:11, fontFamily:INPUT_FF },
+  searchTopK:{ width:54, borderRadius:14, padding:"7px 8px", textAlign:"center", color:"#f8fafc", fontSize:12,
+               outline:"none", boxSizing:"border-box", fontFamily:INPUT_FF, background:"rgba(67, 72, 75, 0.35)",
+               border:"1px solid rgba(255, 255, 255, 0.06)" },
+  searchActionBtn:(disabled) => ({
+               minHeight:40, padding:"0 15px", borderRadius:20, border:"1px solid rgba(96, 165, 250, 0.18)",
+               background: disabled ? "rgba(67, 72, 75, 0.42)" : "rgba(67, 72, 75, 0.95)", color:"#f8fafc",
+               fontSize:12, fontWeight:600, fontFamily:INPUT_FF, cursor: disabled ? "not-allowed" : "pointer",
+               opacity: disabled ? 0.55 : 1, boxShadow: disabled ? "none" : "inset 0 1px 0 rgba(255, 255, 255, 0.04), 0 10px 22px rgba(2, 6, 23, 0.16)" }),
+  voicePanel:{ display:"flex", flexDirection:"column", gap:12, maxWidth:760, minHeight:560 },
+  voiceHeader:{ display:"flex", alignItems:"center", justifyContent:"space-between", gap:12 },
+  voiceBadge:{ display:"inline-flex", alignItems:"center", gap:8, minHeight:36, padding:"0 13px",
+               borderRadius:18, background:"rgba(67, 72, 75, 0.95)", color:"#f8fafc",
+               fontSize:12, fontWeight:600, fontFamily:INPUT_FF },
+  voiceHint:{ minHeight:36, padding:"0 13px", borderRadius:18, display:"inline-flex", alignItems:"center",
+              background:"rgba(23, 27, 32, 0.9)", border:"1px solid rgba(255, 255, 255, 0.06)",
+              color:"#8b949e", fontSize:11, fontWeight:600, fontFamily:INPUT_FF },
+  voiceComposer:{ padding:"14px 16px", borderRadius:24, background:"rgba(23, 27, 32, 0.96)",
+                  border:"1px solid rgba(255, 255, 255, 0.06)", boxShadow:"0 18px 40px rgba(2, 6, 23, 0.18), inset 0 1px 0 rgba(255, 255, 255, 0.03)",
+                  display:"flex", flexDirection:"column", gap:10 },
+  voiceInput:{ width:"100%", minHeight:110, borderRadius:18, padding:"14px 15px", color:"#f8fafc", fontSize:15, lineHeight:"1.5",
+               boxSizing:"border-box", fontFamily:INPUT_FF, resize:"vertical", background:"rgba(67, 72, 75, 0.35)",
+               border:"1px solid rgba(255, 255, 255, 0.06)" },
+  voiceMetaRow:{ display:"flex", alignItems:"center", justifyContent:"space-between", gap:12, flexWrap:"wrap" },
+  voiceMetaText:{ color:"#8b949e", fontSize:12, lineHeight:1.5, fontFamily:INPUT_FF, flex:"1 1 280px" },
+  voiceSendBtn:(disabled) => ({
+               minHeight:40, padding:"0 15px", borderRadius:20, border:"1px solid rgba(96, 165, 250, 0.18)",
+               background: disabled ? "rgba(67, 72, 75, 0.42)" : "rgba(67, 72, 75, 0.95)", color:"#f8fafc",
+               fontSize:12, fontWeight:600, fontFamily:INPUT_FF, cursor: disabled ? "not-allowed" : "pointer",
+               opacity: disabled ? 0.55 : 1, boxShadow: disabled ? "none" : "inset 0 1px 0 rgba(255, 255, 255, 0.04), 0 10px 22px rgba(2, 6, 23, 0.16)" }),
+  voiceError:{ padding:"11px 12px", borderRadius:18, color:"#fecaca", background:"rgba(127, 29, 29, 0.35)",
+               border:"1px solid rgba(248, 113, 113, 0.2)", fontSize:11, lineHeight:1.5, fontFamily:INPUT_FF },
+  voiceInfoCard:{ padding:"14px 16px", borderRadius:24, background:"rgba(23, 27, 32, 0.96)",
+                  border:"1px solid rgba(255, 255, 255, 0.06)", display:"flex", flexDirection:"column", gap:10 },
+  voiceInfoBody:{ fontSize:12, color:"#cbd5e1", lineHeight:1.6, fontFamily:INPUT_FF },
+  voiceWarning:{ fontSize:11, color:"#fbbf24", lineHeight:1.5, fontFamily:INPUT_FF },
+  voiceMeterHeader:{ display:"flex", justifyContent:"space-between", fontSize:10, color:"#8b949e", marginBottom:5, fontFamily:INPUT_FF },
+  voiceMeterTrack:{ height:6, borderRadius:999, overflow:"hidden", background:"rgba(67, 72, 75, 0.48)" },
+  voiceMeterFill:(recording) => ({
+               height:"100%", borderRadius:999,
+               background: recording ? "linear-gradient(90deg, #60a5fa, #93c5fd, #c084fc)" : "rgba(100, 116, 139, 0.45)",
+               transition:"width 0.12s linear" }),
+  voiceDebugCard:{ padding:"14px 16px", borderRadius:24, background:"rgba(23, 27, 32, 0.96)",
+                   border:"1px solid rgba(255, 255, 255, 0.06)", display:"flex", flexDirection:"column", gap:8 },
+  voiceDebugLabel:{ fontSize:10, color:"#8b949e", letterSpacing:"0.8px", textTransform:"uppercase", fontFamily:INPUT_FF },
+  voiceDebugGrid:{ display:"grid", gridTemplateColumns:"repeat(3, minmax(0, 1fr))", gap:8, fontSize:10, fontFamily:INPUT_FF },
+  voiceDebugStat:{ color:"#8b949e" },
+  voiceDebugStatValue:{ color:"#f8fafc" },
+  voiceDebugLog:{ maxHeight:120, overflowY:"auto", borderRadius:16, padding:"10px 12px",
+                  background:"rgba(67, 72, 75, 0.2)", border:"1px solid rgba(255, 255, 255, 0.06)",
+                  fontSize:10, color:"#cbd5e1", lineHeight:1.5, fontFamily:INPUT_FF },
+  voiceDebugEvent:{ color:"#93c5fd" },
+  voiceMicWrap:{ marginTop:"auto", display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center", gap:10, paddingTop:8 },
+  voiceMicBtn:(status, disabled) => ({
+               width:112, height:112, minWidth:112, minHeight:112, borderRadius:"50%",
+               border:"1px solid rgba(255, 255, 255, 0.08)",
+               background: status === "recording" ? "linear-gradient(135deg, rgba(59, 130, 246, 0.95), rgba(192, 132, 252, 0.92))" : "rgba(67, 72, 75, 0.95)",
+               color:"#f8fafc", cursor: disabled ? "not-allowed" : "pointer", opacity: disabled ? 0.45 : 1,
+               animation: status === "recording" ? "pulse 1s ease-in-out infinite" : "none",
+               touchAction:"manipulation", display:"flex", alignItems:"center", justifyContent:"center",
+               boxShadow: status === "recording" ? "0 0 24px rgba(96, 165, 250, 0.35)" : "0 12px 32px rgba(2, 6, 23, 0.24)" }),
+  voiceMicIcon:{ transform:"scale(1.5)", display:"flex", alignItems:"center", justifyContent:"center" },
+  voiceMicLabel:{ fontSize:11, color:"#8b949e", textAlign:"center", fontFamily:INPUT_FF },
+  assistantCard:{ marginBottom:6, padding:"14px 16px", borderRadius:24,
+                  background:"rgba(23, 27, 32, 0.96)", border:"1px solid rgba(255, 255, 255, 0.06)",
+                  backdropFilter:"blur(22px)", WebkitBackdropFilter:"blur(22px)",
+                  boxShadow:"0 18px 40px rgba(2, 6, 23, 0.24), inset 0 1px 0 rgba(255, 255, 255, 0.03)" },
+  assistantCardHeader:{ display:"flex", justifyContent:"space-between", alignItems:"center", gap:12, marginBottom:12 },
+  assistantBadge:{ display:"inline-flex", alignItems:"center", gap:8, minHeight:36, padding:"0 13px",
+                   borderRadius:18, background:"rgba(67, 72, 75, 0.95)", color:"#f8fafc",
+                   fontSize:12, fontWeight:600, fontFamily:INPUT_FF },
+  assistantBadgeDot:{ width:7, height:7, borderRadius:"50%", background:"#60a5fa",
+                      boxShadow:"0 0 10px rgba(96, 165, 250, 0.5)" },
+  assistantMeta:{ display:"flex", alignItems:"center", gap:10, flexWrap:"wrap", fontSize:10,
+                  color:"#8b949e", letterSpacing:"0.7px" },
+  assistantBody:{ fontSize:14, color:"#f8fafc", lineHeight:1.65, fontFamily:INPUT_FF },
+  assistantRequest:{ marginTop:12, paddingTop:12, borderTop:"1px solid rgba(255, 255, 255, 0.06)",
+                     fontSize:11, color:"#8b949e", lineHeight:1.5, fontFamily:INPUT_FF },
   tabs:   { display:"flex", gap:3, borderBottom:"1px solid rgba(148, 163, 184, 0.1)", marginBottom:2 },
   tab:    (a) => ({ padding:"8px 15px", borderRadius:"6px 6px 0 0", border:"1px solid",
             borderColor: a ? "rgba(139, 92, 246, 0.3)" : "transparent",
             background: a ? "rgba(30, 41, 59, 0.5)" : "transparent", color: a ? "#22d3ee" : "#64748b",
             fontSize:TYPE.sm, cursor:"pointer", fontFamily:FF, fontWeight: a ? 600 : 400, marginBottom:-1 }),
-  filterRow:{ display:"flex", flexWrap:"wrap", gap:8, padding:"8px 4px 4px" },
+  filterRow:{ display:"flex", flexWrap:"wrap", gap:9, padding:"8px 4px 6px" },
   filterPill:(a) => ({
-            padding:"6px 12px", borderRadius:999, border:"1px solid",
-            borderColor: a ? "rgba(34, 211, 238, 0.55)" : "rgba(148, 163, 184, 0.25)",
-            background: a ? "rgba(34, 211, 238, 0.18)" : "rgba(15, 23, 42, 0.6)",
-            color: a ? "#22d3ee" : "#94a3b8",
-            fontSize:TYPE.xs, fontFamily:FF, fontWeight:600, cursor:"pointer" }),
-  card:   { borderRadius:10, padding:"12px 14px", display:"flex", gap:11, alignItems:"flex-start" },
-  cName:  { fontSize:TYPE.md, fontWeight:700, color:"#f1f5f9", marginBottom:3 },
-  cDesc:  { fontSize:TYPE.sm, color:"#94a3b8", marginBottom:6, lineHeight:1.55 },
+            minHeight:36, padding:"0 13px", borderRadius:18, border:"1px solid",
+            borderColor: a ? "rgba(96, 165, 250, 0.18)" : "rgba(255, 255, 255, 0.06)",
+            background: a ? "rgba(67, 72, 75, 0.95)" : "rgba(23, 27, 32, 0.9)",
+            color: a ? "#f8fafc" : "#8b949e",
+            fontSize:TYPE.xs, fontFamily:INPUT_FF, fontWeight:600, cursor:"pointer",
+            boxShadow: a ? "inset 0 1px 0 rgba(255, 255, 255, 0.05), 0 10px 22px rgba(2, 6, 23, 0.14)" : "inset 0 1px 0 rgba(255, 255, 255, 0.02)",
+            transition:"all 0.18s ease" }),
+  card:   { borderRadius:24, padding:"14px 16px", display:"flex", gap:14, alignItems:"flex-start",
+            background:"rgba(23, 27, 32, 0.96)", border:"1px solid rgba(255, 255, 255, 0.06)",
+            backdropFilter:"blur(22px)", WebkitBackdropFilter:"blur(22px)",
+            boxShadow:"0 18px 40px rgba(2, 6, 23, 0.2), inset 0 1px 0 rgba(255, 255, 255, 0.03)" },
+  cName:  { fontSize:15, fontWeight:700, color:"#f8fafc", marginBottom:4, letterSpacing:"-0.2px", lineHeight:1.2, fontFamily:INPUT_FF },
+  cDesc:  { fontSize:12, color:"#8b949e", marginBottom:2, lineHeight:1.6, fontFamily:INPUT_FF },
   err:    { borderRadius:6, padding:"9px 12px", fontSize:TYPE.sm, color:"#f87171", lineHeight:1.5,
             background:"rgba(127, 29, 29, 0.5)", border:"1px solid rgba(248, 113, 113, 0.2)" },
   toggleRow:{ display:"flex", alignItems:"center", justifyContent:"space-between", gap:10, paddingTop:2 },
