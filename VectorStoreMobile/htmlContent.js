@@ -3415,348 +3415,513 @@ function SemanticInventory() {
 
           {/* ── Settings tab ── */}
           {activeTab === "settings" && (
-            <div className="glass" style={m.addForm}>
-              <div style={m.secLabel}>SETTINGS</div>
-              <div style={{ fontSize:12, color:"#94a3b8", lineHeight:1.7 }}>
-                Model:
-                <div style={{ color:"#e2e8f0", marginTop:3 }}>{EMBEDDING_MODEL}</div>
+            <div style={{ display:"flex", flexDirection:"column", gap:10 }}>
+              {/* Header with badge */}
+              <div style={m.searchHeader}>
+                <div style={m.searchBadge}>
+                  <svg width={18} height={18} viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                    <circle cx="12" cy="12" r="2.5" stroke="#f8fafc" strokeWidth="1.9"/>
+                    <path d="M19 12a7 7 0 0 0-.08-1l2.02-1.57-2-3.46-2.4.77a7.28 7.28 0 0 0-1.73-1L14.5 3h-5l-.31 2.74a7.28 7.28 0 0 0-1.73 1l-2.4-.77-2 3.46L5.08 11A7 7 0 0 0 5 12c0 .34.03.67.08 1l-2.02 1.57 2 3.46 2.4-.77c.53.43 1.11.77 1.73 1L9.5 21h5l.31-2.74c.62-.23 1.2-.57 1.73-1l2.4.77 2-3.46L18.92 13c.05-.33.08-.66.08-1Z" stroke="#60a5fa" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"/>
+                  </svg>
+                  <span>Settings</span>
+                </div>
+                <div style={m.searchHint}>{inventory.length} items</div>
               </div>
-              <div style={{ fontSize:12, color:"#94a3b8", lineHeight:1.7 }}>
-                Status:
-                <div style={{ color: modelStatus === "ready" ? "#34d399" : modelStatus === "error" ? "#f87171" : "#22d3ee", marginTop:3 }}>
-                  {modelStatus}
+
+              {/* Model & Status Card */}
+              <div style={m.searchCard}>
+                <div style={{ fontSize:11, color:"#94a3b8", letterSpacing:"0.8px", textTransform:"uppercase", fontFamily:INPUT_FF }}>Model & Status</div>
+                <div style={{ display:"flex", flexDirection:"column", gap:8 }}>
+                  <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", gap:10 }}>
+                    <span style={{ fontSize:12, color:"#8b949e", fontFamily:INPUT_FF }}>Embedding Model</span>
+                    <span style={{ fontSize:12, color:"#e2e8f0", fontFamily:INPUT_FF }}>{EMBEDDING_MODEL}</span>
+                  </div>
+                  <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", gap:10 }}>
+                    <span style={{ fontSize:12, color:"#8b949e", fontFamily:INPUT_FF }}>Status</span>
+                    <span style={{
+                      fontSize:12,
+                      color: modelStatus === "ready" ? "#34d399" : modelStatus === "error" ? "#f87171" : "#22d3ee",
+                      fontFamily:INPUT_FF,
+                      fontWeight:600
+                    }}>
+                      {modelStatus}
+                    </span>
+                  </div>
+                  {ttsSupported && (
+                    <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", gap:10, marginTop:4 }}>
+                      <span style={{ fontSize:12, color:"#8b949e", fontFamily:INPUT_FF }}>Spoken Voice Replies</span>
+                      <button
+                        className={ttsEnabled ? "glass-btn" : "glass-btn-secondary"}
+                        style={{
+                          minHeight:32,
+                          padding:"0 14px",
+                          borderRadius:16,
+                          fontSize:11,
+                          fontWeight:600,
+                          fontFamily:INPUT_FF,
+                          color: ttsEnabled ? "#22d3ee" : "#94a3b8",
+                          border: ttsEnabled ? "1px solid rgba(34, 211, 238, 0.35)" : "1px solid rgba(148, 163, 184, 0.2)",
+                          cursor:"pointer",
+                          background: ttsEnabled ? "rgba(34, 211, 238, 0.12)" : "rgba(30, 41, 59, 0.5)"
+                        }}
+                        onClick={() => setTtsEnabled(v => !v)}
+                      >
+                        {ttsEnabled ? "On" : "Off"}
+                      </button>
+                    </div>
+                  )}
                 </div>
               </div>
-              {ttsSupported && (
-                <>
-                  <div style={{ fontSize:12, color:"#94a3b8", lineHeight:1.7 }}>
-                    Spoken Voice Replies:
+
+              {/* Search Settings Card */}
+              <div style={m.searchCard}>
+                <div style={{ fontSize:11, color:"#94a3b8", letterSpacing:"0.8px", textTransform:"uppercase", fontFamily:INPUT_FF }}>Search Settings</div>
+                <div style={{ display:"flex", alignItems:"center", gap:12 }}>
+                  <span style={{ fontSize:12, color:"#8b949e", fontFamily:INPUT_FF }}>Top K Results</span>
+                  <input
+                    type="number"
+                    min={1}
+                    max={Math.max(inventory.length, 1)}
+                    className="glass-input"
+                    style={{ ...m.inp, width:80, textAlign:"center" }}
+                    value={topK}
+                    onChange={e => setTopK(Math.max(1, parseInt(e.target.value, 10) || 1))}
+                  />
+                </div>
+              </div>
+
+              {/* Default Room Card */}
+              <div style={m.searchCard}>
+                <div style={{ fontSize:11, color:"#94a3b8", letterSpacing:"0.8px", textTransform:"uppercase", fontFamily:INPUT_FF }}>Default Room</div>
+                <select
+                  className="glass-input"
+                  style={m.inp}
+                  value={defaultRoom}
+                  onChange={e => {
+                    const next = prettyLabel(e.target.value);
+                    setDefaultRoom(next);
+                    setAddForm(f => ({ ...f, room: next, box: "" }));
+                    setBoxForm(f => ({ ...f, room: next }));
+                    setBoxMove(prev => ({ ...prev, fromRoom: next, toRoom: next, box: "" }));
+                  }}
+                >
+                  {knownRooms.map(room => <option key={room} value={room}>{room}</option>)}
+                </select>
+              </div>
+
+              {/* Add Room Card */}
+              <div style={m.searchCard}>
+                <div style={{ fontSize:11, color:"#94a3b8", letterSpacing:"0.8px", textTransform:"uppercase", fontFamily:INPUT_FF }}>Add New Room</div>
+                <div style={{ display:"flex", gap:8 }}>
+                  <input
+                    className="glass-input"
+                    style={{ ...m.inp, flex:1 }}
+                    placeholder="Room name"
+                    value={roomForm}
+                    onChange={e => setRoomForm(e.target.value)}
+                  />
+                  <button
+                    className="glass-btn"
+                    style={m.searchActionBtn(false)}
+                    onClick={handleAddRoom}
+                  >
+                    Add Room
+                  </button>
+                </div>
+              </div>
+
+              {/* Add Box Card */}
+              <div style={m.searchCard}>
+                <div style={{ fontSize:11, color:"#94a3b8", letterSpacing:"0.8px", textTransform:"uppercase", fontFamily:INPUT_FF }}>Add New Box</div>
+                <select
+                  className="glass-input"
+                  style={m.inp}
+                  value={boxForm.room}
+                  onChange={e => setBoxForm(f => ({ ...f, room: prettyLabel(e.target.value) }))}
+                >
+                  {knownRooms.map(room => <option key={room} value={room}>{room}</option>)}
+                </select>
+                <div style={{ display:"flex", gap:8 }}>
+                  <input
+                    className="glass-input"
+                    style={{ ...m.inp, flex:1 }}
+                    placeholder="Box name"
+                    value={boxForm.name}
+                    onChange={e => setBoxForm(f => ({ ...f, name: e.target.value }))}
+                  />
+                  <button
+                    className="glass-btn"
+                    style={m.searchActionBtn(false)}
+                    onClick={handleAddBox}
+                  >
+                    Add Box
+                  </button>
+                </div>
+              </div>
+
+              {/* Move Box Card */}
+              <div style={m.searchCard}>
+                <div style={{ fontSize:11, color:"#94a3b8", letterSpacing:"0.8px", textTransform:"uppercase", fontFamily:INPUT_FF }}>Move Box Between Rooms</div>
+                <div style={{ fontSize:11, color:"#64748b", lineHeight:1.6, fontFamily:INPUT_FF }}>
+                  Move updates every item currently inside that box.
+                </div>
+                <div style={{ display:"flex", flexDirection:"column", gap:8 }}>
+                  <span style={{ fontSize:12, color:"#8b949e", fontFamily:INPUT_FF }}>From Room</span>
+                  <select
+                    className="glass-input"
+                    style={m.inp}
+                    value={boxMove.fromRoom}
+                    onChange={e => setBoxMove(prev => ({ ...prev, fromRoom: prettyLabel(e.target.value), box: "" }))}
+                  >
+                    {knownRooms.map(room => <option key={room} value={room}>{room}</option>)}
+                  </select>
+                  <span style={{ fontSize:12, color:"#8b949e", fontFamily:INPUT_FF }}>Box</span>
+                  <select
+                    className="glass-input"
+                    style={m.inp}
+                    value={boxMove.box}
+                    onChange={e => setBoxMove(prev => ({ ...prev, box: e.target.value }))}
+                  >
+                    <option value="">Select box in room</option>
+                    {moveBoxes.map(box => <option key={box} value={box}>{box}</option>)}
+                  </select>
+                  <span style={{ fontSize:12, color:"#8b949e", fontFamily:INPUT_FF }}>To Room</span>
+                  <select
+                    className="glass-input"
+                    style={m.inp}
+                    value={boxMove.toRoom}
+                    onChange={e => setBoxMove(prev => ({ ...prev, toRoom: prettyLabel(e.target.value) }))}
+                  >
+                    {knownRooms.map(room => <option key={room} value={room}>{room}</option>)}
+                  </select>
+                  <div style={{ fontSize:11, color: moveReady ? "#67e8f9" : "#64748b", lineHeight:1.6, fontFamily:INPUT_FF, marginTop:4 }}>
+                    {moveSummary}
+                  </div>
+                  <button
+                    className="glass-btn"
+                    style={{
+                      ...m.searchActionBtn(!moveReady),
+                      marginTop:4
+                    }}
+                    onClick={handleMoveBox}
+                    disabled={!moveReady}
+                  >
+                    Move Box Now
+                  </button>
+                </div>
+              </div>
+
+              {/* Data Management Card */}
+              <div style={m.searchCard}>
+                <div style={{ display:"flex", alignItems:"flex-start", justifyContent:"space-between", gap:12 }}>
+                  <div style={{ display:"flex", alignItems:"center", gap:10 }}>
+                    <div style={{ width:34, height:34, borderRadius:12, display:"flex", alignItems:"center", justifyContent:"center", background:"rgba(34, 211, 238, 0.14)", border:"1px solid rgba(34, 211, 238, 0.22)", boxShadow:"0 10px 24px rgba(34, 211, 238, 0.08)" }}>
+                      <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="#67e8f9" strokeWidth="1.8">
+                        <path d="M12 3v18" strokeLinecap="round" />
+                        <path d="M5 8h14" strokeLinecap="round" />
+                        <path d="M7 13h10" strokeLinecap="round" />
+                        <path d="M9 18h6" strokeLinecap="round" />
+                      </svg>
+                    </div>
+                    <div>
+                      <div style={{ fontSize:11, color:"#94a3b8", letterSpacing:"0.8px", textTransform:"uppercase", fontFamily:INPUT_FF }}>Data Management</div>
+                      <div style={{ fontSize:12, color:"#64748b", lineHeight:1.6, fontFamily:INPUT_FF }}>Export your inventory or restore a backup with merge and replace modes.</div>
+                    </div>
+                  </div>
+                  <div style={{ minWidth:72, padding:"8px 10px", borderRadius:14, background:"rgba(15, 23, 42, 0.72)", border:"1px solid rgba(148, 163, 184, 0.12)", textAlign:"center", boxShadow:"inset 0 1px 0 rgba(255,255,255,0.03)" }}>
+                    <div style={{ fontSize:10, color:"#64748b", textTransform:"uppercase", letterSpacing:"0.7px", fontFamily:INPUT_FF }}>Stored</div>
+                    <div style={{ fontSize:16, color:"#f8fafc", fontWeight:700, fontFamily:INPUT_FF, marginTop:2 }}>{inventory.length}</div>
+                  </div>
+                </div>
+                <div style={{ display:"flex", flexDirection:"column", gap:10 }}>
+                  <div style={{ display:"grid", gridTemplateColumns:"1fr auto", gap:12, padding:"12px 14px", borderRadius:16, background:"rgba(15, 23, 42, 0.6)", border:"1px solid rgba(148, 163, 184, 0.1)" }}>
+                    <div>
+                      <div style={{ fontSize:12, color:"#cbd5e1", fontFamily:INPUT_FF, fontWeight:600 }}>Inventory backup</div>
+                      <div style={{ fontSize:11, color:"#64748b", lineHeight:1.6, fontFamily:INPUT_FF, marginTop:3 }}>Download the current local store as JSON for safekeeping or migration.</div>
+                    </div>
+                    <button
+                      className="glass-btn-secondary"
+                      style={{ ...m.btn("default"), minWidth:132, color:"#67e8f9", border:"1px solid rgba(34, 211, 238, 0.35)" }}
+                      onClick={handleExport}
+                    >
+                      Export
+                    </button>
+                  </div>
+                  <div style={{ padding:"12px 14px", borderRadius:16, background:"rgba(15, 23, 42, 0.6)", border:"1px solid rgba(148, 163, 184, 0.1)", display:"flex", flexDirection:"column", gap:10 }}>
+                    <div>
+                      <div style={{ fontSize:12, color:"#cbd5e1", fontFamily:INPUT_FF, fontWeight:600 }}>Restore from backup</div>
+                      <div style={{ fontSize:11, color:"#64748b", lineHeight:1.6, fontFamily:INPUT_FF, marginTop:3 }}>Choose how imported data should be applied before selecting a backup file.</div>
+                    </div>
+                    <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:8 }}>
+                    <button
+                      className={importMode === "merge" ? "glass-btn" : "glass-btn-secondary"}
+                      style={{ ...m.btn("default"), minHeight:40, color: importMode === "merge" ? "#e2e8f0" : "#94a3b8" }}
+                      onClick={() => setImportMode("merge")}
+                    >
+                      Merge
+                    </button>
+                    <button
+                      className={importMode === "replace" ? "glass-btn" : "glass-btn-secondary"}
+                      style={{ ...m.btn("default"), minHeight:40, color: importMode === "replace" ? "#e2e8f0" : "#94a3b8" }}
+                      onClick={() => setImportMode("replace")}
+                    >
+                      Replace
+                    </button>
+                    </div>
+                    <label
+                      className="glass-btn-secondary"
+                      style={{
+                        ...m.btn("default"),
+                        minHeight:42,
+                        display:"flex",
+                        alignItems:"center",
+                        justifyContent:"center",
+                        color:"#67e8f9",
+                        border:"1px solid rgba(34, 211, 238, 0.35)",
+                        opacity: seeding ? 0.45 : 1,
+                        cursor: seeding ? "not-allowed" : "pointer",
+                      }}
+                    >
+                      <input
+                        type="file"
+                        accept=".json,application/json"
+                        style={{ display:"none" }}
+                        disabled={seeding}
+                        onChange={handleImportFileSelect}
+                      />
+                      Import from Backup
+                    </label>
+                  </div>
+                </div>
+              </div>
+
+              {/* Clear Room Card */}
+              <div style={m.searchCard}>
+                <div style={{ display:"flex", alignItems:"center", gap:10 }}>
+                  <div style={{ width:34, height:34, borderRadius:12, display:"flex", alignItems:"center", justifyContent:"center", background:"rgba(251, 191, 36, 0.12)", border:"1px solid rgba(251, 191, 36, 0.18)" }}>
+                    <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="#fbbf24" strokeWidth="1.8">
+                      <path d="M4 7h16" strokeLinecap="round" />
+                      <path d="M9 7V5h6v2" strokeLinecap="round" />
+                      <path d="M7 7l1 11a2 2 0 002 2h4a2 2 0 002-2l1-11" strokeLinecap="round" strokeLinejoin="round" />
+                    </svg>
+                  </div>
+                  <div>
+                    <div style={{ fontSize:11, color:"#94a3b8", letterSpacing:"0.8px", textTransform:"uppercase", fontFamily:INPUT_FF }}>Clear Room</div>
+                    <div style={{ fontSize:12, color:"#64748b", lineHeight:1.6, fontFamily:INPUT_FF }}>Remove every stored item assigned to a selected room in one action.</div>
+                  </div>
+                </div>
+                <div style={{ display:"flex", flexDirection:"column", gap:10, padding:"12px 14px", borderRadius:16, background:"rgba(15, 23, 42, 0.6)", border:"1px solid rgba(148, 163, 184, 0.1)" }}>
+                  <div style={{ fontSize:12, color:"#8b949e", fontFamily:INPUT_FF }}>Target room</div>
+                  <select
+                    className="glass-input"
+                    style={m.inp}
+                    value={clearRoomTarget}
+                    onChange={e => setClearRoomTarget(e.target.value)}
+                  >
+                    <option value="">Select room</option>
+                    {knownRooms.map(room => <option key={room} value={room}>{room}</option>)}
+                  </select>
+                  <button
+                    className="glass-btn-secondary"
+                    style={{ ...m.btn("default"), minHeight:42, color:"#f87171", border:"1px solid rgba(248, 113, 113, 0.35)", opacity: clearRoomTarget ? 1 : 0.45, cursor: clearRoomTarget ? "pointer" : "not-allowed" }}
+                    onClick={handleClearRoom}
+                    disabled={!clearRoomTarget}
+                  >
+                    Clear Selected Room
+                  </button>
+                </div>
+              </div>
+
+              {/* Clear All Card */}
+              <div style={m.searchCard}>
+                <div style={{ display:"flex", alignItems:"center", gap:10 }}>
+                  <div style={{ width:34, height:34, borderRadius:12, display:"flex", alignItems:"center", justifyContent:"center", background:"rgba(248, 113, 113, 0.12)", border:"1px solid rgba(248, 113, 113, 0.22)", boxShadow:"0 10px 24px rgba(248, 113, 113, 0.08)" }}>
+                    <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="#f87171" strokeWidth="1.8">
+                      <path d="M12 9v4" strokeLinecap="round" />
+                      <path d="M12 17h.01" strokeLinecap="round" />
+                      <path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z" strokeLinecap="round" strokeLinejoin="round" />
+                    </svg>
+                  </div>
+                  <div>
+                    <div style={{ fontSize:11, color:"#94a3b8", letterSpacing:"0.8px", textTransform:"uppercase", fontFamily:INPUT_FF }}>Danger Zone</div>
+                    <div style={{ fontSize:12, color:"#fca5a5", lineHeight:1.6, fontFamily:INPUT_FF }}>This permanently removes every stored item and resets the local inventory state.</div>
+                  </div>
+                </div>
+                <div style={{ padding:"12px 14px", borderRadius:16, background:"rgba(127, 29, 29, 0.18)", border:"1px solid rgba(248, 113, 113, 0.18)", display:"flex", flexDirection:"column", gap:10 }}>
+                  <div style={{ fontSize:11, color:"#fda4af", lineHeight:1.6, fontFamily:INPUT_FF }}>
+                    Use only when you need a complete reset. This action cannot be undone from inside the app.
                   </div>
                   <button
                     className="glass-btn-secondary"
-                    style={{ ...m.btn("secondary"), padding:"10px 12px" }}
-                    onClick={() => setTtsEnabled(v => !v)}
+                    style={{ ...m.btn("default"), minHeight:42, color:"#f87171", border:"1px solid rgba(248, 113, 113, 0.35)", background:"rgba(127, 29, 29, 0.28)" }}
+                    onClick={handleClearAllData}
                   >
-                    {ttsEnabled ? "On" : "Off"}
+                    Clear All Stored Items
                   </button>
-                </>
-              )}
-              <div style={{ fontSize:12, color:"#94a3b8", lineHeight:1.7 }}>
-                Search Results (Top K):
+                </div>
               </div>
-              <input
-                type="number" min={1} max={Math.max(inventory.length, 1)}
-                className="glass-input"
-                style={{ ...m.inp, width:90 }}
-                value={topK}
-                onChange={e => setTopK(Math.max(1, parseInt(e.target.value, 10) || 1))}
-              />
-              <div style={{ fontSize:12, color:"#94a3b8", lineHeight:1.7 }}>
-                Default Room:
-              </div>
-              <select
-                className="glass-input"
-                style={m.inp}
-                value={defaultRoom}
-                onChange={e => {
-                  const next = prettyLabel(e.target.value);
-                  setDefaultRoom(next);
-                  setAddForm(f => ({ ...f, room: next, box: "" }));
-                  setBoxForm(f => ({ ...f, room: next }));
-                  setBoxMove(prev => ({ ...prev, fromRoom: next, toRoom: next, box: "" }));
-                }}
-              >
-                {knownRooms.map(room => <option key={room} value={room}>{room}</option>)}
-              </select>
-              <div style={{ fontSize:12, color:"#94a3b8", lineHeight:1.7 }}>
-                Add Room:
-              </div>
-              <div style={{ display:"flex", gap:8 }}>
-                <input
-                  className="glass-input"
-                  style={{ ...m.inp, flex:1 }}
-                  placeholder="Room name"
-                  value={roomForm}
-                  onChange={e => setRoomForm(e.target.value)}
-                />
-                <button
-                  className="glass-btn-secondary"
-                  style={{ ...m.btn("default"), width:110, color:"#67e8f9", border:"1px solid rgba(34, 211, 238, 0.35)" }}
-                  onClick={handleAddRoom}
-                >
-                  Add Room
-                </button>
-              </div>
-              <div style={{ fontSize:12, color:"#94a3b8", lineHeight:1.7 }}>
-                Add Box (assign to room):
-              </div>
-              <select
-                className="glass-input"
-                style={m.inp}
-                value={boxForm.room}
-                onChange={e => setBoxForm(f => ({ ...f, room: prettyLabel(e.target.value) }))}
-              >
-                {knownRooms.map(room => <option key={room} value={room}>{room}</option>)}
-              </select>
-              <div style={{ display:"flex", gap:8 }}>
-                <input
-                  className="glass-input"
-                  style={{ ...m.inp, flex:1 }}
-                  placeholder="Box name"
-                  value={boxForm.name}
-                  onChange={e => setBoxForm(f => ({ ...f, name: e.target.value }))}
-                />
-                <button
-                  className="glass-btn-secondary"
-                  style={{ ...m.btn("default"), width:110, color:"#67e8f9", border:"1px solid rgba(34, 211, 238, 0.35)" }}
-                  onClick={handleAddBox}
-                >
-                  Add Box
-                </button>
-              </div>
-              <div style={{ fontSize:12, color:"#94a3b8", lineHeight:1.7 }}>
-                Move Box Between Rooms:
-              </div>
-              <div style={{ fontSize:11, color:"#64748b", lineHeight:1.6 }}>
-                Move updates every item currently inside that box.
-              </div>
-              <div style={{ fontSize:12, color:"#94a3b8", lineHeight:1.7 }}>1. From room</div>
-              <select
-                className="glass-input"
-                style={m.inp}
-                value={boxMove.fromRoom}
-                onChange={e => setBoxMove(prev => ({ ...prev, fromRoom: prettyLabel(e.target.value), box: "" }))}
-              >
-                {knownRooms.map(room => <option key={room} value={room}>{room}</option>)}
-              </select>
-              <div style={{ fontSize:12, color:"#94a3b8", lineHeight:1.7 }}>2. Box</div>
-              <select
-                className="glass-input"
-                style={m.inp}
-                value={boxMove.box}
-                onChange={e => setBoxMove(prev => ({ ...prev, box: e.target.value }))}
-              >
-                <option value="">Select box in room</option>
-                {moveBoxes.map(box => <option key={box} value={box}>{box}</option>)}
-              </select>
-              <div style={{ fontSize:12, color:"#94a3b8", lineHeight:1.7 }}>3. To room</div>
-              <select
-                className="glass-input"
-                style={m.inp}
-                value={boxMove.toRoom}
-                onChange={e => setBoxMove(prev => ({ ...prev, toRoom: prettyLabel(e.target.value) }))}
-              >
-                {knownRooms.map(room => <option key={room} value={room}>{room}</option>)}
-              </select>
-              <div style={{ fontSize:11, color: moveReady ? "#67e8f9" : "#64748b", lineHeight:1.6 }}>
-                {moveSummary}
-              </div>
-              <button
-                className="glass-btn-secondary"
-                style={{
-                  ...m.btn("default"),
-                  color: moveReady ? "#67e8f9" : "#64748b",
-                  border:"1px solid rgba(34, 211, 238, 0.35)",
-                  opacity: moveReady ? 1 : 0.55
-                }}
-                onClick={handleMoveBox}
-                disabled={!moveReady}
-              >
-                Move Box Now
-              </button>
-              <div style={{ fontSize:11, color:"#64748b", lineHeight:1.6 }}>
-                Stored items: {inventory.length}
-              </div>
-              <button
-                className="glass-btn-secondary"
-                style={{ ...m.btn("default"), color:"#f87171", border:"1px solid rgba(248, 113, 113, 0.35)" }}
-                onClick={handleClearAllData}
-              >
-                Clear All Stored Items
-              </button>
-              <button
-                className="glass-btn-secondary"
-                style={{ ...m.btn("default"), color:"#67e8f9", border:"1px solid rgba(34, 211, 238, 0.35)" }}
-                onClick={handleExport}
-              >
-                Export Inventory
-              </button>
-              <div style={{ fontSize:12, color:"#94a3b8", lineHeight:1.7 }}>
-                Merge or Replace:
-              </div>
-              <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:8 }}>
-                <button
-                  className={importMode === "merge" ? "glass-btn" : "glass-btn-secondary"}
-                  style={{ ...m.btn("default"), color: importMode === "merge" ? "#e2e8f0" : "#94a3b8" }}
-                  onClick={() => setImportMode("merge")}
-                >
-                  Merge
-                </button>
-                <button
-                  className={importMode === "replace" ? "glass-btn" : "glass-btn-secondary"}
-                  style={{ ...m.btn("default"), color: importMode === "replace" ? "#e2e8f0" : "#94a3b8" }}
-                  onClick={() => setImportMode("replace")}
-                >
-                  Replace
-                </button>
-              </div>
-              <label
-                className="glass-btn-secondary"
-                style={{
-                  ...m.btn("default"),
-                  display:"flex",
-                  alignItems:"center",
-                  justifyContent:"center",
-                  color:"#67e8f9",
-                  border:"1px solid rgba(34, 211, 238, 0.35)",
-                  opacity: seeding ? 0.45 : 1,
-                  cursor: seeding ? "not-allowed" : "pointer",
-                }}
-              >
-                <input
-                  type="file"
-                  accept=".json,application/json"
-                  style={{ display:"none" }}
-                  disabled={seeding}
-                  onChange={handleImportFileSelect}
-                />
-                Import from Backup
-              </label>
-              {window.speechSynthesis && (
-                <>
-                  <div style={{ fontSize:12, color:"#94a3b8", lineHeight:1.7 }}>
-                    Spoken replies apply to voice-originated assistant responses.
-                  </div>
-                </>
-              )}
-              <div style={{ fontSize:12, color:"#94a3b8", lineHeight:1.7 }}>Clear Room:</div>
-              <select
-                className="glass-input"
-                style={m.inp}
-                value={clearRoomTarget}
-                onChange={e => setClearRoomTarget(e.target.value)}
-              >
-                <option value="">Select room</option>
-                {knownRooms.map(room => <option key={room} value={room}>{room}</option>)}
-              </select>
-              <button
-                className="glass-btn-secondary"
-                style={{ ...m.btn("default"), color:"#f87171", border:"1px solid rgba(248, 113, 113, 0.35)", opacity: clearRoomTarget ? 1 : 0.45, cursor: clearRoomTarget ? "pointer" : "not-allowed" }}
-                onClick={handleClearRoom}
-                disabled={!clearRoomTarget}
-              >
-                Clear Room
-              </button>
             </div>
           )}
 
           {/* ── Add tab ── */}
           {activeTab === "add" && (
-            <div className="glass" style={m.addForm}>
-              <div style={m.secLabel}>ADD ITEM</div>
-              <div className="glass" style={{ borderRadius:10, padding:10, display:"flex", flexDirection:"column", gap:8 }}>
-                <div style={{ fontSize:11, color:"#94a3b8", letterSpacing:"0.5px" }}>NATURAL-LANGUAGE COMMAND</div>
-                <div style={{ fontSize:11, color:"#64748b", lineHeight:1.5 }}>
-                  Use either quick command or manual form below.
+            <div style={{ display:"flex", flexDirection:"column", gap:10 }}>
+              {/* Header with badge */}
+              <div style={m.searchHeader}>
+                <div style={m.searchBadge}>
+                  <svg width={18} height={18} viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                    <path d="M12 5v14" stroke="#f8fafc" strokeWidth="1.9" strokeLinecap="round" />
+                    <path d="M5 12h14" stroke="#60a5fa" strokeWidth="1.9" strokeLinecap="round" />
+                  </svg>
+                  <span>Add Item</span>
                 </div>
-                <textarea
-                  className="glass-input"
-                  style={{ ...m.inp, minHeight:72, resize:"vertical" }}
-                  placeholder={'Try: "add 2 wrenches in the garage"'}
-                  value={commandInput}
-                  onChange={e => {
-                    setCommandInput(e.target.value);
-                    if (commandError) setCommandError(null);
-                  }}
-                  onKeyDown={e => {
-                    if (e.key === "Enter" && !e.shiftKey) {
-                      e.preventDefault();
-                      if (!commandBusy) handleCommandSubmit();
-                    }
-                  }}
-                  disabled={commandBusy}
-                />
-                <button
-                  className="glass-btn"
-                  style={m.btn("primary", commandBusy)}
-                  onClick={handleCommandSubmit}
-                  disabled={commandBusy}
-                >
-                  {llmLoading ? "Thinking…" : loading.add ? "Saving…" : "Run Command"}
-                </button>
-                {commandError && <div style={{ fontSize:11, color:"#f87171" }}>{commandError}</div>}
+                <div style={m.searchHint}>Manual Entry</div>
               </div>
 
-              <div style={{ ...m.secLabel, marginTop:2 }}>MANUAL ENTRY</div>
-              <input
-                className="glass-input"
-                style={m.inp} placeholder="Item name *"
-                value={addForm.name}
-                onChange={e => setAddForm(f => ({ ...f, name: e.target.value }))}
-                disabled={modelStatus !== "ready"}
-              />
-              <textarea
-                className="glass-input"
-                style={{ ...m.inp, minHeight:80, resize:"vertical" }}
-                placeholder="Description (improves search accuracy)"
-                value={addForm.description}
-                onChange={e => setAddForm(f => ({ ...f, description: e.target.value }))}
-                disabled={modelStatus !== "ready"}
-              />
-              <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:8 }}>
-                <input className="glass-input" style={m.inp} placeholder="Qty"  value={addForm.qty}  onChange={e => setAddForm(f => ({ ...f, qty: e.target.value }))}  disabled={modelStatus !== "ready"} />
-                <input className="glass-input" style={m.inp} placeholder="Unit" value={addForm.unit} onChange={e => setAddForm(f => ({ ...f, unit: e.target.value }))} disabled={modelStatus !== "ready"} />
-              </div>
-              <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:8 }}>
-                <select
+              {/* Item Details Card */}
+              <div style={m.searchCard}>
+                <div style={{ fontSize:11, color:"#94a3b8", letterSpacing:"0.8px", textTransform:"uppercase", fontFamily:INPUT_FF }}>Item Details</div>
+                <input
                   className="glass-input"
-                  style={m.inp}
-                  value={addForm.room}
-                  onChange={e => setAddForm(f => ({ ...f, room: prettyLabel(e.target.value), box: "" }))}
+                  style={m.searchInput}
+                  placeholder="Item name *"
+                  value={addForm.name}
+                  onChange={e => setAddForm(f => ({ ...f, name: e.target.value }))}
                   disabled={modelStatus !== "ready"}
-                >
-                  {knownRooms.map(room => <option key={room} value={room}>{room}</option>)}
-                </select>
-                <select
+                />
+                <textarea
                   className="glass-input"
-                  style={m.inp}
-                  value={addForm.box}
-                  onChange={e => setAddForm(f => ({ ...f, box: e.target.value }))}
+                  style={{ ...m.searchInput, minHeight:80 }}
+                  placeholder="Description (improves semantic search accuracy)"
+                  value={addForm.description}
+                  onChange={e => setAddForm(f => ({ ...f, description: e.target.value }))}
                   disabled={modelStatus !== "ready"}
-                >
-                  <option value="">No box</option>
-                  {addItemBoxes.map(box => <option key={box} value={box}>{box}</option>)}
-                </select>
+                />
               </div>
-              <div style={{ display:"flex", flexWrap:"wrap", gap:6 }}>
-                {STATUSES.map(st => {
-                  const isSelected = addForm.status === st;
-                  const colors = STATUS_COLORS[st];
-                  return (
-                    <button key={st}
-                      className={isSelected ? "glass-btn" : "glass-btn-secondary"}
-                      style={{
-                        padding:"8px 14px", borderRadius:20,
-                        border: \`1px solid \${isSelected ? "rgba(139, 92, 246, 0.4)" : "rgba(148, 163, 184, 0.15)"}\`,
-                        color: isSelected ? "#fff" : "#94a3b8",
-                        fontSize:12, cursor:"pointer", fontFamily:"inherit"
-                      }}
-                      onClick={() => setAddForm(f => ({ ...f, status: st }))}
-                    >{st}</button>
-                  );
-                })}
+
+              {/* Quantity & Unit Card */}
+              <div style={m.searchCard}>
+                <div style={{ fontSize:11, color:"#94a3b8", letterSpacing:"0.8px", textTransform:"uppercase", fontFamily:INPUT_FF }}>Quantity & Unit</div>
+                <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10 }}>
+                  <input
+                    className="glass-input"
+                    style={m.inp}
+                    placeholder="Qty"
+                    value={addForm.qty}
+                    onChange={e => setAddForm(f => ({ ...f, qty: e.target.value }))}
+                    disabled={modelStatus !== "ready"}
+                  />
+                  <input
+                    className="glass-input"
+                    style={m.inp}
+                    placeholder="Unit"
+                    value={addForm.unit}
+                    onChange={e => setAddForm(f => ({ ...f, unit: e.target.value }))}
+                    disabled={modelStatus !== "ready"}
+                  />
+                </div>
               </div>
+
+              {/* Location Card */}
+              <div style={m.searchCard}>
+                <div style={{ fontSize:11, color:"#94a3b8", letterSpacing:"0.8px", textTransform:"uppercase", fontFamily:INPUT_FF }}>Location</div>
+                <div style={{ display:"flex", flexDirection:"column", gap:10 }}>
+                  <div style={{ display:"flex", alignItems:"center", gap:8 }}>
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#60a5fa" strokeWidth="2">
+                      <path d="M12 2a7 7 0 00-7 7c0 5.25 7 13 7 13s7-7.75 7-13a7 7 0 00-7-7z" strokeLinecap="round" strokeLinejoin="round" />
+                      <circle cx="12" cy="9" r="2.5" />
+                    </svg>
+                    <span style={{ fontSize:12, color:"#8b949e", fontFamily:INPUT_FF }}>Room</span>
+                  </div>
+                  <select
+                    className="glass-input"
+                    style={m.inp}
+                    value={addForm.room}
+                    onChange={e => setAddForm(f => ({ ...f, room: prettyLabel(e.target.value), box: "" }))}
+                    disabled={modelStatus !== "ready"}
+                  >
+                    {knownRooms.map(room => <option key={room} value={room}>{room}</option>)}
+                  </select>
+                  <div style={{ display:"flex", alignItems:"center", gap:8, marginTop:4 }}>
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#c084fc" strokeWidth="2">
+                      <rect x="3" y="7" width="18" height="14" rx="2" strokeLinecap="round" strokeLinejoin="round" />
+                      <path d="M8 7V5a2 2 0 012-2h4a2 2 0 012 2v2" />
+                    </svg>
+                    <span style={{ fontSize:12, color:"#8b949e", fontFamily:INPUT_FF }}>Box</span>
+                  </div>
+                  <select
+                    className="glass-input"
+                    style={m.inp}
+                    value={addForm.box}
+                    onChange={e => setAddForm(f => ({ ...f, box: e.target.value }))}
+                    disabled={modelStatus !== "ready"}
+                  >
+                    <option value="">No box</option>
+                    {addItemBoxes.map(box => <option key={box} value={box}>{box}</option>)}
+                  </select>
+                </div>
+              </div>
+
+              {/* Status Card */}
+              <div style={m.searchCard}>
+                <div style={{ fontSize:11, color:"#94a3b8", letterSpacing:"0.8px", textTransform:"uppercase", fontFamily:INPUT_FF }}>Status</div>
+                <div style={{ display:"flex", flexWrap:"wrap", gap:8 }}>
+                  {STATUSES.map(st => {
+                    const isSelected = addForm.status === st;
+                    const colors = STATUS_COLORS[st];
+                    return (
+                      <button key={st}
+                        className={isSelected ? "glass-btn" : "glass-btn-secondary"}
+                        style={{
+                          minHeight:36,
+                          padding:"0 16px",
+                          borderRadius:18,
+                          border: "1px solid " + (isSelected ? colors.border : "rgba(148, 163, 184, 0.15)"),
+                          background: isSelected ? colors.bg : "rgba(30, 41, 59, 0.5)",
+                          color: isSelected ? colors.text : "#94a3b8",
+                          fontSize:12,
+                          fontWeight:600,
+                          cursor:"pointer",
+                          fontFamily:INPUT_FF,
+                          boxShadow: isSelected ? ("0 8px 18px " + colors.glow) : "none"
+                        }}
+                        onClick={() => setAddForm(f => ({ ...f, status: st }))}
+                      >{st}</button>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {/* Submit Button */}
               <button
                 className="glass-btn glow-cyan"
-                style={m.btn("primary", loading.add || seeding || modelStatus !== "ready")}
+                style={{
+                  ...m.searchActionBtn(loading.add || seeding || modelStatus !== "ready"),
+                  width:"100%",
+                  minHeight:48,
+                  borderRadius:24,
+                  fontSize:14
+                }}
                 disabled={loading.add || seeding || modelStatus !== "ready"}
                 onClick={handleAdd}
               >
-                {loading.add ? "⟳ Embedding…" : "+ Embed & Store"}
+                {loading.add ? (
+                  <div style={{ display:"flex", alignItems:"center", justifyContent:"center", gap:10 }}>
+                    <div className="spin" style={{ width:18, height:18 }} />
+                    <span>Embedding…</span>
+                  </div>
+                ) : (
+                  <div style={{ display:"flex", alignItems:"center", justifyContent:"center", gap:10 }}>
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                      <path d="M12 5v14" strokeLinecap="round" />
+                      <path d="M5 12h14" strokeLinecap="round" />
+                    </svg>
+                    <span>Embed & Store</span>
+                  </div>
+                )}
               </button>
             </div>
-          )}
-        </div>
+          )}        </div>
 
         {/* Floating Bottom Navigation */}
         <div style={m.navShell}>
