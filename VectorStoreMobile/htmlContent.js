@@ -1325,7 +1325,6 @@ function SemanticInventory() {
       const stored = await batchEmbedStoreRef.current(valid, ({ done, total, current }) => {
         setSeedProg({ done, total, current });
       });
-      setInventory(prev => [...prev, ...stored]);
       setReviewItems([]);
       setActiveTab("inventory");
       toast(\`Stored \${stored.length} item\${stored.length !== 1 ? "s" : ""} ✓\`);
@@ -2676,76 +2675,85 @@ function SemanticInventory() {
     </svg>
   );
 
-  const ReviewRow = ({ item, onUpdate, onRemove, compact = false }) => (
-    <div className="glass-card" style={{
-      borderRadius: 16,
-      padding: compact ? 12 : 14,
-      display: "flex",
-      gap: 10,
-      alignItems: "center",
-      background: "rgba(23, 27, 32, 0.96)",
-      border: "1px solid rgba(255, 255, 255, 0.06)",
-    }}>
-      <div style={{ flex: 1, display: "flex", gap: 8 }}>
-        <input
-          className="glass-input"
+  const ReviewRow = ({ item, onUpdate, onRemove, compact = false }) => {
+    const [localName, setLocalName] = React.useState(item.name);
+    const [localQty,  setLocalQty]  = React.useState(item.qty);
+    return (
+      <div className="glass-card" style={{
+        borderRadius: 12,
+        padding: compact ? "8px 10px" : 14,
+        display: "flex",
+        gap: 10,
+        alignItems: "center",
+        background: "rgba(23, 27, 32, 0.96)",
+        border: "1px solid rgba(255, 255, 255, 0.06)",
+      }}>
+        <div style={{ flex: 1, display: "flex", gap: 8 }}>
+          <input
+            className="glass-input"
+            style={{
+              flex: 2,
+              borderRadius: 10,
+              padding: compact ? "7px 10px" : "10px 12px",
+              color: "#f8fafc",
+              fontSize: compact ? 13 : 14,
+              fontFamily: INPUT_FF,
+              background: "rgba(67, 72, 75, 0.35)",
+            }}
+            value={localName}
+            onChange={e => setLocalName(e.target.value)}
+            onBlur={() => onUpdate(item.id, "name", localName)}
+            placeholder="Item name"
+          />
+          <input
+            className="glass-input"
+            style={{
+              width: compact ? 56 : 64,
+              borderRadius: 10,
+              padding: compact ? "7px 8px" : "10px 12px",
+              color: "#f8fafc",
+              fontSize: 14,
+              textAlign: "center",
+              fontFamily: INPUT_FF,
+              background: "rgba(67, 72, 75, 0.35)",
+            }}
+            value={localQty}
+            onChange={e => setLocalQty(e.target.value)}
+            onBlur={() => onUpdate(item.id, "qty", localQty)}
+            placeholder="Qty"
+            type="number"
+            min={1}
+          />
+        </div>
+        <button
+          className="glass-btn-secondary"
           style={{
-            flex: 2,
+            padding: compact ? "7px 10px" : "10px 12px",
             borderRadius: 10,
-            padding: "10px 12px",
-            color: "#f8fafc",
-            fontSize: 14,
-            fontFamily: INPUT_FF,
-            background: "rgba(67, 72, 75, 0.35)",
+            color: "#f87171",
+            border: "1px solid rgba(248, 113, 113, 0.3)",
+            cursor: "pointer",
+            background: "rgba(127, 29, 29, 0.2)",
+            flexShrink: 0,
           }}
-          value={item.name}
-          onChange={e => onUpdate(item.id, "name", e.target.value)}
-          placeholder="Item name"
-        />
-        <input
-          className="glass-input"
-          style={{
-            width: 64,
-            borderRadius: 10,
-            padding: "10px 12px",
-            color: "#f8fafc",
-            fontSize: 14,
-            textAlign: "center",
-            fontFamily: INPUT_FF,
-            background: "rgba(67, 72, 75, 0.35)",
-          }}
-          value={item.qty}
-          onChange={e => onUpdate(item.id, "qty", e.target.value)}
-          placeholder="Qty"
-          type="number"
-          min={1}
-        />
+          onClick={() => onRemove(item.id)}
+        >
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+            <path d="M18 6L6 18M6 6l12 12" strokeLinecap="round" strokeLinejoin="round" />
+          </svg>
+        </button>
       </div>
-      <button
-        className="glass-btn-secondary"
-        style={{
-          padding: "10px 12px",
-          borderRadius: 10,
-          color: "#f87171",
-          border: "1px solid rgba(248, 113, 113, 0.3)",
-          cursor: "pointer",
-          background: "rgba(127, 29, 29, 0.2)",
-        }}
-        onClick={() => onRemove(item.id)}
-      >
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-          <path d="M18 6L6 18M6 6l12 12" strokeLinecap="round" strokeLinejoin="round" />
-        </svg>
-      </button>
-    </div>
-  );
+    );
+  };
 
   const renderReviewPanel = (compact = false) => {
     const reviewRoom = reviewItems[0]?.room || "";
     const reviewBox  = reviewItems[0]?.box  || "";
     const reviewLocation = [reviewRoom, reviewBox].filter(Boolean).join(" › ");
     const styles = compact ? m : d;
-    const panelStyle = compact ? { ...m.voicePanel, animation: "none" } : { ...d.voicePanel, animation: "none" };
+    const panelStyle = compact
+      ? { display:"flex", flexDirection:"column", gap:10, flex:1, minHeight:0 }
+      : { ...d.voicePanel, animation: "none" };
 
     return (
       <div style={panelStyle}>
@@ -2797,7 +2805,7 @@ function SemanticInventory() {
           <>
             <div style={{
               ...styles.voiceInfoCard,
-              maxHeight: compact ? "calc(100vh - 420px)" : 400,
+              ...(compact ? { flex:1, minHeight:0 } : { maxHeight:400 }),
               overflowY: "auto",
             }}>
               <div style={{ fontSize: 11, color: "#8b949e", marginBottom: 10, letterSpacing: "0.8px", textTransform: "uppercase", fontFamily: INPUT_FF }}>
@@ -2811,15 +2819,15 @@ function SemanticInventory() {
             </div>
 
             {/* Action buttons */}
-            <div style={styles.voiceMicWrap}>
+            <div style={{ ...styles.voiceMicWrap, marginTop: compact ? 0 : "auto" }}>
               <button
                 className="glass-btn glow-cyan"
                 style={{
                   ...styles.voiceMicBtn("idle", seeding),
                   width: "100%",
                   maxWidth: compact ? 280 : 320,
-                  height: compact ? 56 : 64,
-                  minHeight: compact ? 56 : 64,
+                  height: compact ? 48 : 64,
+                  minHeight: compact ? 48 : 64,
                   borderRadius: 16,
                 }}
                 disabled={seeding}
@@ -2840,7 +2848,7 @@ function SemanticInventory() {
                 style={{
                   width: "100%",
                   maxWidth: compact ? 280 : 320,
-                  padding: "12px",
+                  padding: compact ? "10px" : "12px",
                   borderRadius: 12,
                   border: "1px solid rgba(148, 163, 184, 0.2)",
                   background: "rgba(30, 41, 59, 0.5)",
