@@ -64,6 +64,8 @@ VectorStore/
 
 ## Setup
 
+⚠️ **Important: Set up environment variables before running the app.**
+
 ```bash
 cd VectorStoreMobile
 npm install
@@ -119,6 +121,8 @@ Schema:
 ---
 
 ## Environment Variables
+
+⚠️ **Required before running the app**
 
 ```env
 EXPO_PUBLIC_GROQ_API_KEY=your_key
