@@ -216,18 +216,25 @@ Each item record:
 
 ## Configuration
 
-All configuration is hardcoded. Key values to know if modifying:
+### AI / App Settings
 
 | Setting | Value | Location |
 |---|---|---|
-| AI model | `Xenova/all-MiniLM-L6-v2` | `htmlContent.js`, `VectorStoreWeb/app.js` |
-| Similarity threshold | `0.5` | `htmlContent.js`, `VectorStoreWeb/app.js` |
-| IndexedDB name | `vectorstock-db` | `htmlContent.js`, `VectorStoreWeb/app.js` |
-| App bundle ID (iOS) | `com.anonymous.VectorStoreMobile` | `app.json` |
-| Expo slug | `VectorStoreMobile` | `app.json` |
-| Voice permissions | microphone + speech recognition usage strings | `app.json`, `ios/VectorStoreMobile/Info.plist` |
+| AI model | Xenova/all-MiniLM-L6-v2 | app files |
+| Similarity threshold | 0.5 | app files |
+| IndexedDB name | vectorstock-db | app files |
 
-No `.env` files or environment variables are required.
+---
+
+### Environment Variables (REQUIRED for LLM Features)
+
+Some features may rely on external LLM APIs (e.g., Groq or Gemini). These require API keys.
+
+Create a `.env` file in the project root (or inside `VectorStoreMobile/` if using Expo):
+
+```env
+EXPO_PUBLIC_GROQ_API_KEY=your_groq_api_key_here
+EXPO_PUBLIC_GEMINI_API_KEY=your_gemini_api_key_here
 
 ---
 
