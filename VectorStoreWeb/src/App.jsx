@@ -270,14 +270,26 @@ function InventoryApp({ session }) {
 
   useEffect(() => {
     if (!rooms.length) return;
-    if (!rooms.some(room => room.name === settings.defaultRoom)) {
-      setSettings(current => ({ ...current, defaultRoom: rooms[0].name }));
+    const hasDefaultRoom = rooms.some(room => room.name === settings.defaultRoom);
+    const nextDefaultRoom = hasDefaultRoom ? settings.defaultRoom : rooms[0].name;
+
+    if (!hasDefaultRoom) {
+      setSettings(current => ({ ...current, defaultRoom: nextDefaultRoom }));
     }
     if (!form.roomName || !rooms.some(room => room.name === form.roomName)) {
-      setForm(current => ({ ...current, roomName: settings.defaultRoom || rooms[0].name }));
+      setForm(current => ({ ...current, roomName: nextDefaultRoom, boxName: '' }));
     }
-    if (!boxForm.roomId) setBoxForm(current => ({ ...current, roomId: rooms[0].id }));
+    if (!boxForm.roomId || !rooms.some(room => room.id === boxForm.roomId)) {
+      setBoxForm(current => ({ ...current, roomId: rooms[0].id }));
+    }
   }, [boxForm.roomId, form.roomName, rooms, settings.defaultRoom]);
+
+  useEffect(() => {
+    if (!form.boxName) return;
+    const room = rooms.find(candidate => candidate.name === form.roomName);
+    const boxStillAvailable = room && boxes.some(box => box.room_id === room.id && box.name === form.boxName);
+    if (!boxStillAvailable) setForm(current => ({ ...current, boxName: '' }));
+  }, [boxes, form.boxName, form.roomName, rooms]);
 
   useEffect(() => {
     window.localStorage.setItem('vectorstore.defaultRoom', settings.defaultRoom || '');
@@ -302,7 +314,6 @@ function InventoryApp({ session }) {
     return { items: items.length, units: totalUnits, rooms: rooms.length, boxes: boxes.length };
   }, [boxes.length, items, rooms.length]);
 
-  const roomNames = useMemo(() => rooms.map(room => room.name), [rooms]);
   const boxesForSelectedRoom = useMemo(() => {
     const room = rooms.find(candidate => candidate.name === form.roomName);
     if (!room) return [];
@@ -909,7 +920,7 @@ function InventoryApp({ session }) {
           <CapturePage
             form={form}
             setForm={setForm}
-            roomNames={roomNames}
+            rooms={rooms}
             boxesForSelectedRoom={boxesForSelectedRoom}
             onAddItem={handleAddItem}
             working={working}
@@ -1081,7 +1092,7 @@ function LocationsPage({ rooms, boxes, roomForm, setRoomForm, boxForm, setBoxFor
 function CapturePage({
   form,
   setForm,
-  roomNames,
+  rooms,
   boxesForSelectedRoom,
   onAddItem,
   working,
@@ -1099,7 +1110,7 @@ function CapturePage({
     <section className="capture-grid">
       <form className="tool-panel add-form" onSubmit={event => onAddItem(event, 'manual')}>
         <div className="section-title"><PackagePlus size={18} /><h3>Manual Add</h3></div>
-        <ItemFormFields form={form} setForm={setForm} roomNames={roomNames} boxesForSelectedRoom={boxesForSelectedRoom} />
+        <ItemFormFields form={form} setForm={setForm} rooms={rooms} boxesForSelectedRoom={boxesForSelectedRoom} />
         <button className="primary-btn" type="submit" disabled={working}><PackagePlus size={17} /> Embed and Store</button>
       </form>
 
@@ -1188,7 +1199,7 @@ function SettingsPage({ user, settings, setSettings, rooms, importInputRef, hand
   );
 }
 
-function ItemFormFields({ form, setForm, roomNames, boxesForSelectedRoom }) {
+function ItemFormFields({ form, setForm, rooms, boxesForSelectedRoom }) {
   return (
     <>
       <label>Item name<input value={form.name} onChange={event => setForm({ ...form, name: event.target.value })} required /></label>
@@ -1199,13 +1210,16 @@ function ItemFormFields({ form, setForm, roomNames, boxesForSelectedRoom }) {
       </div>
       <label>
         Room
-        <input list="rooms" value={form.roomName} onChange={event => setForm({ ...form, roomName: event.target.value, boxName: '' })} />
-        <datalist id="rooms">{roomNames.map(room => <option key={room} value={room} />)}</datalist>
+        <select value={form.roomName} onChange={event => setForm({ ...form, roomName: event.target.value, boxName: '' })}>
+          {rooms.map(room => <option key={room.id} value={room.name}>{room.name}</option>)}
+        </select>
       </label>
       <label>
         Box
-        <input list="boxes" value={form.boxName} onChange={event => setForm({ ...form, boxName: event.target.value })} placeholder="Optional" />
-        <datalist id="boxes">{boxesForSelectedRoom.map(box => <option key={box.id} value={box.name} />)}</datalist>
+        <select value={form.boxName} onChange={event => setForm({ ...form, boxName: event.target.value })}>
+          <option value="">No box</option>
+          {boxesForSelectedRoom.map(box => <option key={box.id} value={box.name}>{box.name}</option>)}
+        </select>
       </label>
       <label>
         Status
