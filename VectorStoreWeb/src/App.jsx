@@ -1262,6 +1262,8 @@ function ItemList({ items, onDelete, working }) {
 }
 
 function AuthScreen() {
+  const demoEmail = 'test@gmail.com';
+  const demoPassword = '123456';
   const [mode, setMode] = useState('sign-in');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -1293,6 +1295,19 @@ function AuthScreen() {
     setWorking(false);
   }
 
+  async function useDemoAccount() {
+    setWorking(true);
+    setError('');
+    setMessage('');
+    setMode('sign-in');
+    setEmail(demoEmail);
+    setPassword(demoPassword);
+    const { error: authError } = await supabase.auth.signInWithPassword({ email: demoEmail, password: demoPassword });
+    if (authError) setError(authError.message);
+    else setMessage('Signed in with the demo account.');
+    setWorking(false);
+  }
+
   return (
     <div className="auth-shell">
       <form className="auth-card" onSubmit={submit}>
@@ -1304,6 +1319,7 @@ function AuthScreen() {
         <label>Email<input type="email" value={email} onChange={event => setEmail(event.target.value)} required /></label>
         <label>Password<input type="password" value={password} onChange={event => setPassword(event.target.value)} minLength="6" required /></label>
         <button className="primary-btn" type="submit" disabled={working}>{working && <Loader2 className="spin-icon" size={17} />}{mode === 'sign-up' ? 'Create Account' : 'Sign In'}</button>
+        <button className="secondary-btn full" type="button" onClick={useDemoAccount} disabled={working}>Use Demo Account</button>
         <button className="secondary-btn full" type="button" onClick={sendMagicLink} disabled={working || !email}>Send Magic Link</button>
         <button className="text-btn" type="button" onClick={() => setMode(mode === 'sign-up' ? 'sign-in' : 'sign-up')}>{mode === 'sign-up' ? 'Already have an account? Sign in.' : 'Need an account? Create one.'}</button>
       </form>
