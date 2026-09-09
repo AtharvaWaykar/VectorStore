@@ -1,0 +1,48 @@
+name: CI
+
+on:
+  pull_request:
+    paths:
+      - 'VectorStoreWeb/**'
+      - '.github/workflows/**'
+  push:
+    branches: [main]
+    paths:
+      - 'VectorStoreWeb/**'
+      - '.github/workflows/**'
+
+permissions:
+  contents: read
+
+jobs:
+  web:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: VectorStoreWeb
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: VectorStoreWeb/package-lock.json
+      - run: npm ci
+      - run: npm test
+      - run: npm run build
+      - name: Start preview server
+        run: npm run preview -- --host 127.0.0.1 > "$RUNNER_TEMP/vectorstore-preview.log" 2>&1 &
+      - name: Run integration smoke test
+        run: |
+          for attempt in {1..30}; do
+            if curl --fail --silent http://127.0.0.1:4173/ >/dev/null; then break; fi
+            sleep 1
+          done
+          npm run test:integration
+      - if: always()
+        name: Upload preview logs
+        uses: actions/upload-artifact@v4
+        with:
+          name: vectorstore-preview-log
+          path: ${{ runner.temp }}/vectorstore-preview.log
+

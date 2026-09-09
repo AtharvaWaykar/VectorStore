@@ -22,6 +22,16 @@ npm install
 npm run dev
 ```
 
+## Automated Testing
+
+```bash
+npm test                 # unit and Supabase contract tests
+npm run build            # production bundle
+npm run test:all         # tests, build, preview smoke test
+```
+
+GitHub Actions runs these checks for pull requests. Production deployment and scheduled monitoring are documented in [`docs/ci-cd.md`](../docs/ci-cd.md).
+
 ## Optional AI Setup
 
 The website generates item embeddings in the browser using `@huggingface/transformers`, so no private key is needed for normal inventory storage and search.
