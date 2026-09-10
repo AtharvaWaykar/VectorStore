@@ -21,10 +21,10 @@ jobs:
       run:
         working-directory: VectorStoreWeb
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
         with:
-          node-version: 20
+          node-version: 24
           cache: npm
           cache-dependency-path: VectorStoreWeb/package-lock.json
       - run: npm ci
@@ -45,4 +45,3 @@ jobs:
         with:
           name: vectorstore-preview-log
           path: ${{ runner.temp }}/vectorstore-preview.log
-
