@@ -5,10 +5,12 @@ if (!response.ok) {
 }
 
 const html = await response.text();
-for (const marker of ['<div id="root"></div>', '/src/main.jsx']) {
-  if (!html.includes(marker)) {
-    throw new Error(`Smoke check failed: response did not contain ${marker}`);
-  }
+if (!html.includes('<div id="root"></div>')) {
+  throw new Error('Smoke check failed: response did not contain the React root element');
+}
+
+if (!/<script[^>]+src="\/assets\/[^"']+\.js"/.test(html)) {
+  throw new Error('Smoke check failed: response did not reference a built JavaScript asset');
 }
 
 console.log(`Smoke check passed for ${baseUrl}`);
