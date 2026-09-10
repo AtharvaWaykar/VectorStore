@@ -19,7 +19,7 @@ The frontend workflow deploys `VectorStoreWeb/` to Vercel after tests pass. Conf
 - `VITE_SUPABASE_URL`
 - `VITE_SUPABASE_ANON_KEY`
 
-Set the Vercel project root directory to `VectorStoreWeb`.
+Set the Vercel project root directory to `VectorStoreWeb`. The GitHub deployment action runs from the repository root, so do not add a second `working-directory: VectorStoreWeb` to that action; otherwise Vercel resolves the path as `VectorStoreWeb/VectorStoreWeb`.
 The two `VITE_*` values must also be present in the Vercel project's Production Environment Variables because Vercel performs the production build remotely.
 
 The Supabase workflow applies `VectorStoreWeb/supabase/schema.sql` and deploys the `llm` and `cv` Edge Functions. Configure:
