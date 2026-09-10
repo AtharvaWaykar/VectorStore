@@ -1,4 +1,12 @@
-const baseUrl = process.env.SMOKE_URL || 'http://127.0.0.1:4173';
+const configuredUrl = process.env.SMOKE_URL || 'http://127.0.0.1:4173';
+let baseUrl;
+try {
+  baseUrl = new URL(configuredUrl);
+  if (!['http:', 'https:'].includes(baseUrl.protocol)) throw new Error('unsupported protocol');
+} catch {
+  throw new Error(`Smoke check failed: SMOKE_URL must be a full http(s) URL, for example https://your-app.vercel.app. Received: ${configuredUrl}`);
+}
+
 const response = await fetch(baseUrl);
 if (!response.ok) {
   throw new Error(`Smoke check failed: ${baseUrl} returned ${response.status}`);
